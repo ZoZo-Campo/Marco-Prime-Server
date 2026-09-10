@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ENV_FILE="${ROOT}/.env.server"
+
+if docker compose version >/dev/null 2>&1; then COMPOSE=(docker compose)
+elif command -v docker-compose >/dev/null 2>&1; then COMPOSE=(docker-compose)
+else echo "Docker Compose est absent."; exit 1; fi
+
+if [[ ! -f "${ENV_FILE}" ]]; then
+  echo "Créez .env.server depuis .env.server.example."; exit 1
+fi
+if grep -q 'REPLACE_HERE' "${ENV_FILE}"; then
+  echo ".env.server contient encore REPLACE_HERE."; exit 1
+fi
+
+case "${1:-help}" in
+  start) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" up -d --build ;;
+  rebuild|restart) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" up -d --build --force-recreate ;;
+  stop) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" down ;;
+  status) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" ps ;;
+  logs) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" logs -f --tail=100 ;;
+  check) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" config --quiet && echo "Configuration serveur valide." ;;
+  *) echo "Usage : ./server {start|rebuild|restart|stop|status|logs|check}" ;;
+esac
+

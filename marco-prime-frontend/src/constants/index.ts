@@ -1,0 +1,4 @@
+export const PRODUCT_FETCH_LIMIT = 100;
+export const PRODUCT_GRID_PLACEHOLDER_COUNT = 9;
+export const HISTORY_BATCH_SIZE = 50;
+export const HISTORY_SKELETON_COUNT = 12;
