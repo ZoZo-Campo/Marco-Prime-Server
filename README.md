@@ -11,7 +11,7 @@ Les valeurs à demander et à remplacer sont détaillées dans [CONFIGURATION_A_
 ## Serveur
 
 ```bash
-cp .env.server.example .env.server
+./server check
 nano .env.server
 ./server check
 ./server start
@@ -22,13 +22,10 @@ Le DNS doit pointer vers le serveur et les ports 80/443 doivent être accessible
 ## Raspberry / frontend
 
 ```bash
-cp .env.frontend.example .env.frontend
+./frontend check
 nano .env.frontend
 ./frontend check
 ./frontend start
 ```
 
 Ouvrir ensuite `http://127.0.0.1:3001` dans Chromium.
-
-La gestion Wi-Fi de Marco reste locale au Raspberry et est désactivée dans cette première variante frontend-only. Elle devra être raccordée à un petit service local séparé avant activation.
-

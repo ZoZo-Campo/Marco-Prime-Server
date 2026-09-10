@@ -7,7 +7,6 @@ import { PurchaseController } from "../controllers/purchase.controller.js";
 import { RechargeController } from "../controllers/recharge.controller.js";
 import { StatisticsController } from "../controllers/statistics.controller.js";
 import { SystemController } from "../controllers/system.controller.js";
-import { WifiController } from "../controllers/wifi.controller.js";
 import { cardNumberParamSchema } from "../validators/members.validator.js";
 import { paginationQuerySchema } from "../validators/orders.validator.js";
 import {
@@ -22,7 +21,6 @@ import {
   statisticsCostUpdateSchema,
   statisticsQuerySchema,
 } from "../validators/statistics.validator.js";
-import { wifiAdminSchema, wifiConnectSchema } from "../validators/wifi.validator.js";
 
 const memberController = new MemberController();
 const productController = new ProductController();
@@ -31,19 +29,9 @@ const purchaseController = new PurchaseController();
 const rechargeController = new RechargeController();
 const statisticsController = new StatisticsController();
 const systemController = new SystemController();
-const wifiController = new WifiController();
 
 const router = new Hono()
   .get("/system/status", (c) => systemController.getStatus(c))
-  .post("/system/wifi/status", zValidator("json", wifiAdminSchema), (c) =>
-    wifiController.getStatus(c),
-  )
-  .post("/system/wifi/scan", zValidator("json", wifiAdminSchema), (c) =>
-    wifiController.scan(c),
-  )
-  .post("/system/wifi/connect", zValidator("json", wifiConnectSchema), (c) =>
-    wifiController.connect(c),
-  )
   .get(
     "/member/:card_number",
     zValidator("param", cardNumberParamSchema),

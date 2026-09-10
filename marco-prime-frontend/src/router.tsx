@@ -9,7 +9,6 @@ import { HISTORY_ROUTE_URL, HistoryPage } from "./pages/history";
 import { BUY_ROUTE_URL, BuyPage } from "./pages/buy";
 import { RECHARGE_ROUTE_URL, RechargePage } from "./pages/recharge";
 import { TICKET_ROUTE_URL, TicketPage } from "./pages/ticket";
-import { WIFI_ROUTE_URL, WifiPage } from "./pages/wifi";
 
 export function Router() {
   return (
@@ -19,7 +18,6 @@ export function Router() {
           <Route path={BUY_ROUTE_URL} component={BuyPage} />
           <Route path={RECHARGE_ROUTE_URL} component={RechargePage} />
           <Route path={HOME_ROUTE_URL} component={HomePage} />
-          <Route path={WIFI_ROUTE_URL} component={WifiPage} />
           <Route path={HISTORY_ROUTE_URL} component={HistoryPage} />
           <Route path={CREDITS_ROUTE_URL} component={CreditsPage} />
           <Route path={CONFIG_ROUTE_URL} component={ConfigPage} />

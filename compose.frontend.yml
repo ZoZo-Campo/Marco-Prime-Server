@@ -6,7 +6,6 @@ services:
       args:
         VITE_API_URL: ${MARCO_REMOTE_API_URL:?MARCO_REMOTE_API_URL is required}
         VITE_API_TOKEN: ${MARCO_API_TOKEN:?MARCO_API_TOKEN is required}
-        VITE_WIFI_MANAGEMENT_ENABLED: "false"
     image: marco-prime-frontend:local
     ports:
       - "127.0.0.1:${MARCO_FRONTEND_PORT:-3001}:8080"
@@ -24,4 +23,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
