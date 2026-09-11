@@ -2,8 +2,10 @@ import type { ComponentChildren } from "preact";
 import {
   AlertCircle,
   BarChart3,
+  Calculator,
   Check,
   CreditCard,
+  PencilLine,
   Loader2,
   Save,
   ShieldAlert,
@@ -21,11 +23,13 @@ import { cn } from "../utils/cn";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { StatisticsPanel } from "../components/features/config/statistics-panel";
+import { AccountingPanel } from "../components/features/config/accounting-panel";
+import { OrderCorrectionsPanel } from "../components/features/config/order-corrections-panel";
 
 export const CONFIG_ROUTE_URL = "/config";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
-type AdminSection = "catalog" | "statistics";
+type AdminSection = "catalog" | "statistics" | "accounting" | "corrections";
 
 export function ConfigPage() {
   return (
@@ -166,7 +170,7 @@ function ConfigContent() {
   };
 
   const adminNavigation = (
-    <nav class="flex items-center gap-3 border-b bg-card px-7 py-3">
+    <nav class="flex shrink-0 items-center gap-3 overflow-x-auto border-b bg-card px-7 py-3">
       <Button
         variant={section === "catalog" ? "default" : "outline"}
         onClick={() => setSection("catalog")}
@@ -179,7 +183,19 @@ function ConfigContent() {
       >
         <BarChart3 class="size-5" /> Statistiques
       </Button>
-      <span class="ml-auto text-sm text-muted-foreground">
+      <Button
+        variant={section === "accounting" ? "default" : "outline"}
+        onClick={() => setSection("accounting")}
+      >
+        <Calculator class="size-5" /> Compta
+      </Button>
+      <Button
+        variant={section === "corrections" ? "default" : "outline"}
+        onClick={() => setSection("corrections")}
+      >
+        <PencilLine class="size-5" /> Corrections
+      </Button>
+      <span class="ml-auto shrink-0 text-sm text-muted-foreground">
         {member.firstName} {member.lastName}
       </span>
     </nav>
@@ -190,6 +206,24 @@ function ConfigContent() {
       <div class="flex flex-1 min-h-0 flex-col overflow-hidden">
         {adminNavigation}
         <StatisticsPanel adminCardNumber={member.cardNumber} />
+      </div>
+    );
+  }
+
+  if (section === "accounting") {
+    return (
+      <div class="flex flex-1 min-h-0 flex-col overflow-hidden">
+        {adminNavigation}
+        <AccountingPanel adminCardNumber={member.cardNumber} />
+      </div>
+    );
+  }
+
+  if (section === "corrections") {
+    return (
+      <div class="flex flex-1 min-h-0 flex-col overflow-hidden">
+        {adminNavigation}
+        <OrderCorrectionsPanel adminCardNumber={member.cardNumber} />
       </div>
     );
   }

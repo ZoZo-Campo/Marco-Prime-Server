@@ -23,8 +23,13 @@ export function HistoryItem({
   const memberName = order.member
     ? `${order.member.firstName} ${order.member.lastName}`
     : "Membre supprimé";
-  const isRecharge = order.product === null;
-  const productName = order.product?.name ?? "Rechargement";
+  const isRefund = order.ledgerKind === "correction-refund";
+  const isCorrectedOriginal = order.ledgerKind === "corrected-original";
+  const isReplacement = order.ledgerKind === "correction-replacement";
+  const isRecharge = order.product === null && !isRefund;
+  const productName = isRefund
+    ? `Remboursement correction #${order.correctionOriginalOrderId}`
+    : order.product?.name ?? "Rechargement";
   const ledgerAmount = Number(order.price);
   const formattedAmount = Number.isFinite(ledgerAmount)
     ? `${ledgerAmount > 0 ? "+" : ""}${ledgerAmount.toFixed(2)} EUR`
@@ -39,13 +44,15 @@ export function HistoryItem({
     >
       <span class="truncate font-medium">{memberName}</span>
       <span class="truncate text-muted-foreground">
-        {isRecharge ? productName : `${order.amount}x ${productName}`}
+        {isRecharge || isRefund ? productName : `${order.amount}x ${productName}`}
+        {isCorrectedOriginal && " · corrigée"}
+        {isReplacement && " · remplacement"}
       </span>
       <span
         class={`text-right font-medium ${
           hasInvalidSign
             ? "text-amber-600"
-            : isRecharge
+            : isRecharge || isRefund
               ? "text-green-600"
               : "text-destructive"
         }`}

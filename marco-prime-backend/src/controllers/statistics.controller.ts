@@ -4,6 +4,7 @@ import type { z } from "zod";
 import { MemberRepository } from "../repositories/member.repository.js";
 import { StatisticsRepository } from "../repositories/statistics.repository.js";
 import { productCostService } from "../services/product-cost.service.js";
+import { orderCorrectionService } from "../services/order-correction.service.js";
 import type {
   statisticsCostQuerySchema,
   statisticsCostUpdateSchema,
@@ -24,11 +25,25 @@ export class StatisticsController {
 
     const from = new Date(request.from);
     const to = new Date(request.to);
-    const [sales, recharges, costs] = await Promise.all([
+    const [allSales, allRecharges, costs, corrections] = await Promise.all([
       this.statisticsRepository.findSales(from, to),
       this.statisticsRepository.findRecharges(from, to),
       productCostService.getCosts(),
+      orderCorrectionService.all(),
     ]);
+    const completedCorrections = corrections.filter(
+      (correction) => correction.status === "completed",
+    );
+    const replacedSaleIds = new Set(
+      completedCorrections.map((correction) => correction.originalOrderId),
+    );
+    const refundOrderIds = new Set(
+      completedCorrections.map((correction) => correction.refundOrderId),
+    );
+    const sales = allSales.filter((sale) => !replacedSaleIds.has(sale.id));
+    const recharges = allRecharges.filter(
+      (recharge) => !refundOrderIds.has(recharge.id),
+    );
 
     const byProduct = new Map<
       number,

@@ -263,6 +263,116 @@ export class OrderRepository {
       };
     });
   }
+
+  async correctPurchaseTransaction(
+    originalOrderId: number,
+    replacementProductId: number | null,
+    replacementAmount: number,
+  ) {
+    return await db.transaction(async (tx) => {
+      const [original] = await tx
+        .select({
+          id: orders.id,
+          productId: orders.productId,
+          memberId: orders.memberId,
+          price: orders.price,
+          amount: orders.amount,
+        })
+        .from(orders)
+        .where(eq(orders.id, originalOrderId))
+        .limit(1)
+        .for("update");
+
+      if (!original) throw new Error("CORRECTION_ORDER_NOT_FOUND");
+      if (!original.productId || !original.memberId || original.amount <= 0) {
+        throw new Error("CORRECTION_NOT_A_PURCHASE");
+      }
+      const originalLedgerCents = toCents(original.price);
+      if (originalLedgerCents === null || originalLedgerCents >= 0) {
+        throw new Error("CORRECTION_INVALID_ORIGINAL");
+      }
+      if (
+        replacementProductId === original.productId &&
+        replacementAmount === original.amount
+      ) {
+        throw new Error("CORRECTION_NO_CHANGE");
+      }
+
+      const [lockedMember] = await tx
+        .select({ balance: members.balance })
+        .from(members)
+        .where(eq(members.id, original.memberId))
+        .limit(1)
+        .for("update");
+      if (!lockedMember) throw new Error("CORRECTION_MEMBER_NOT_FOUND");
+
+      let replacementTotalCents = 0;
+      if (replacementProductId !== null) {
+        const [replacement] = await tx
+          .select({ id: products.id, price: products.price, available: products.available })
+          .from(products)
+          .where(eq(products.id, replacementProductId))
+          .limit(1)
+          .for("update");
+        if (!replacement?.available) throw new Error("CORRECTION_PRODUCT_UNAVAILABLE");
+
+        let unitPriceCents: number | null;
+        if (replacement.id === original.productId && (-originalLedgerCents) % original.amount === 0) {
+          unitPriceCents = (-originalLedgerCents) / original.amount;
+        } else {
+          unitPriceCents = toCents(replacement.price);
+        }
+        if (unitPriceCents === null || unitPriceCents <= 0) {
+          throw new Error("CORRECTION_INVALID_PRODUCT_PRICE");
+        }
+        replacementTotalCents = unitPriceCents * replacementAmount;
+      }
+
+      const refundCents = -originalLedgerCents;
+      const balanceCents = toCents(lockedMember.balance);
+      if (balanceCents === null) throw new Error("CORRECTION_INVALID_BALANCE");
+      const balanceChangeCents = refundCents - replacementTotalCents;
+      const newBalanceCents = balanceCents + balanceChangeCents;
+      if (!Number.isSafeInteger(newBalanceCents) || Math.abs(newBalanceCents) > MAX_DATABASE_MONEY_CENTS) {
+        throw new Error("CORRECTION_INVALID_BALANCE");
+      }
+
+      const [refund] = await tx.insert(orders).values({
+        productId: null,
+        memberId: original.memberId,
+        price: fromCents(refundCents),
+        amount: 1,
+      }).$returningId();
+
+      let replacementOrderId: number | null = null;
+      if (replacementProductId !== null && replacementAmount > 0) {
+        const [replacement] = await tx.insert(orders).values({
+          productId: replacementProductId,
+          memberId: original.memberId,
+          price: fromCents(-replacementTotalCents),
+          amount: replacementAmount,
+        }).$returningId();
+        replacementOrderId = replacement.id;
+      }
+
+      await tx.update(members).set({ balance: fromCents(newBalanceCents) }).where(eq(members.id, original.memberId));
+
+      return {
+        originalOrderId,
+        refundOrderId: refund.id,
+        replacementOrderId,
+        originalProductId: original.productId,
+        replacementProductId,
+        originalAmount: original.amount,
+        replacementAmount,
+        refunded: fromCents(refundCents),
+        charged: fromCents(replacementTotalCents),
+        balanceChange: fromCents(balanceChangeCents),
+        previousBalance: lockedMember.balance,
+        newBalance: fromCents(newBalanceCents),
+      };
+    });
+  }
 }
 
 const MAX_DATABASE_MONEY_CENTS = 9_999_999_999;

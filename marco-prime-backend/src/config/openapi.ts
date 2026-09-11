@@ -293,6 +293,56 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/v1/accounting": {
+      post: {
+        summary: "Read the local real-world accounting table",
+        tags: ["Accounting"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Measured liters, actual revenue and result" },
+          "403": { description: "Administrator card required" },
+        },
+      },
+      put: {
+        summary: "Save the local real-world accounting table",
+        description:
+          "Stores measured liters, purchase price per liter and actual revenue without modifying Fouaille",
+        tags: ["Accounting"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Accounting table saved" },
+          "400": { description: "Invalid accounting row" },
+          "403": { description: "Administrator card required" },
+        },
+      },
+    },
+    "/api/v1/order-corrections": {
+      post: {
+        summary: "List recent purchases and their correction status",
+        tags: ["Corrections"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Recent purchases" },
+          "403": { description: "Administrator card required" },
+        },
+      },
+    },
+    "/api/v1/order-corrections/apply": {
+      post: {
+        summary: "Cancel or replace an existing purchase",
+        description:
+          "Refunds the original line and optionally creates its replacement in one MySQL transaction",
+        tags: ["Corrections"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "201": { description: "Correction completed" },
+          "400": { description: "Purchase cannot be corrected" },
+          "403": { description: "Administrator card required" },
+          "409": { description: "Purchase already corrected or pending review" },
+          "503": { description: "Result uncertain; manual review required" },
+        },
+      },
+    },
     "/api/v1/purchase": {
       post: {
         summary: "Create a purchase",

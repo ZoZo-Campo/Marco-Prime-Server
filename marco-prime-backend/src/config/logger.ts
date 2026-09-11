@@ -13,7 +13,11 @@ export function customLogger(message: string, ...rest: string[]) {
 }
 
 export function auditEvent(
-  event: "purchase.completed" | "recharge.completed",
+  event:
+    | "purchase.completed"
+    | "recharge.completed"
+    | "purchase.corrected"
+    | "accounting.updated",
   details: Record<string, unknown>,
 ) {
   if (process.env.NODE_ENV === "test") return;

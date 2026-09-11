@@ -172,9 +172,17 @@ function TransactionDetail({
   const memberName = order.member
     ? `${order.member.firstName} ${order.member.lastName}`
     : "Membre supprimé";
-  const operation = order.product
-    ? `${order.amount} × ${order.product.name}`
-    : "Rechargement";
+  const operation = order.ledgerKind === "correction-refund"
+    ? `Remboursement de la vente #${order.correctionOriginalOrderId}`
+    : order.product
+      ? `${order.amount} × ${order.product.name}${
+          order.ledgerKind === "corrected-original"
+            ? " (vente corrigée)"
+            : order.ledgerKind === "correction-replacement"
+              ? " (remplacement)"
+              : ""
+        }`
+      : "Rechargement";
   const amount = Number(order.price);
   const date = new Date(order.date).toLocaleString("fr-FR", {
     dateStyle: "full",

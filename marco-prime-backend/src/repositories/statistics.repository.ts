@@ -30,7 +30,7 @@ export class StatisticsRepository {
 
   async findRecharges(from: Date, to: Date) {
     return await db
-      .select({ price: orders.price, amount: orders.amount })
+      .select({ id: orders.id, price: orders.price, amount: orders.amount })
       .from(orders)
       .where(
         and(

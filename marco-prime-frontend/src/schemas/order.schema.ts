@@ -21,6 +21,14 @@ export const orderSchema = z.object({
   price: moneyStringSchema,
   amount: z.coerce.number().int().positive(),
   date: z.string().datetime(),
+  ledgerKind: z.enum([
+    "purchase",
+    "recharge",
+    "corrected-original",
+    "correction-refund",
+    "correction-replacement",
+  ]).optional(),
+  correctionOriginalOrderId: z.number().int().positive().nullable().optional(),
 });
 
 export const orderListResponseSchema = z.object({
