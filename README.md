@@ -4,9 +4,11 @@ Caisse et rechargement du BDE, accessibles depuis **n'importe quel appareil
 doté d'un navigateur** (téléphone, ordinateur, tablette) sur le réseau de
 l'école, via **HTTPS** et un nom de domaine interne.
 
-Le backend, le frontend et le HTTPS tiennent dans deux conteneurs Docker sur le
-serveur de l'école. Aucun identifiant MySQL n'est installé sur les appareils
-clients.
+Le backend, le frontend et le HTTPS tournent dans des conteneurs Docker sur le
+serveur de l'école : un conteneur applicatif (API + fichiers statiques) et un
+conteneur Caddy pour le HTTPS. Un troisième service, très court, prépare les
+droits du volume au démarrage. Aucun identifiant MySQL n'est installé sur les
+appareils clients.
 
 ---
 
@@ -58,6 +60,10 @@ récents : compta, robustesse, audit), puis ajoute le déploiement réseau.
 
 Un seul nom de domaine, une seule origine : le frontend appelle `/api/v1` en
 relatif, donc **pas de CORS** et un seul certificat à gérer.
+
+Au démarrage, un service éphémère `data-permissions` remet les droits du volume
+`/app/data` à l'utilisateur du conteneur, puis s'arrête. Il évite qu'une
+sauvegarde restaurée ou un volume recréé bloque l'écriture de la compta.
 
 ### Deux modes de déploiement
 
@@ -114,8 +120,8 @@ dans **[RESEAU_ET_HTTPS.md](RESEAU_ET_HTTPS.md)**.
 | `./server logs` | Journaux en direct |
 | `./server check` | Vérifie la syntaxe de la configuration |
 | `./server url` | Affiche l'adresse HTTPS |
-| `./server backup` | Archive le volume de données dans `backups/` |
-| `./server cert` | Exporte l'autorité locale Caddy dans `certs/` |
+| `./server backup` | Archive le volume de données dans `backups/` (application démarrée) |
+| `./server cert` | Exporte l'autorité locale Caddy dans `certs/` (mode `tls internal`) |
 
 ### Kiosque séparé (optionnel)
 
@@ -135,12 +141,24 @@ cd marco-prime-frontend && pnpm install && pnpm dev
 Tests du backend (base locale `marco_prime_test`, jamais la production) :
 
 ```bash
+# 1. Un MySQL local doit écouter sur 127.0.0.1:3306. Créez la base de test
+#    avec un compte administrateur de ce MySQL (root ou équivalent).
+mysql -h 127.0.0.1 -P 3306 -u root -p \
+  -e "CREATE DATABASE IF NOT EXISTS marco_prime_test;"
+
+# 2. Créez le schéma, puis lancez les tests.
 cd marco-prime-backend
-docker exec marco-prime-mysql mysql -uroot -proot \
-  -e "CREATE DATABASE IF NOT EXISTS marco_prime_test; GRANT ALL PRIVILEGES ON marco_prime_test.* TO 'marco'@'%';"
-DATABASE_URL=mysql://marco:marco123@127.0.0.1:3306/marco_prime_test pnpm db:push
+DATABASE_URL='mysql://UTILISATEUR:MOT_DE_PASSE@127.0.0.1:3306/marco_prime_test' \
+  pnpm db:push
 pnpm test
 ```
+
+`pnpm test` lit `marco-prime-backend/.env.test` et réinitialise la base à chaque
+exécution. Adaptez ce fichier à votre MySQL local (l'exemple fourni utilise
+`marco`/`marco123` : ce compte doit exister et avoir les droits sur
+`marco_prime_test`), ou passez `DATABASE_URL` en variable d'environnement : elle
+est prioritaire. Le lanceur refuse toute base non locale ou dont le nom ne
+contient pas `test`.
 
 ---
 
@@ -158,7 +176,7 @@ Marco-Prime-Server/
 │   └── public/                 PWA (manifest, service worker, icônes)
 ├── Dockerfile.server           image unique API + frontend
 ├── Dockerfile.frontend         frontend statique pour kiosque séparé
-├── compose.server.yml          app + Caddy
+├── compose.server.yml          app + Caddy (+ service de préparation du volume)
 ├── compose.frontend.yml        frontend seul (Raspberry)
 ├── Caddyfile                   HTTPS et reverse proxy
 ├── nginx.frontend.conf         service statique du kiosque

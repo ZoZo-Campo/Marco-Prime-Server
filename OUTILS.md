@@ -36,7 +36,7 @@ configuré et comment intervenir sans casser le reste.
 | Fichier | Rôle |
 |---------|------|
 | `Dockerfile.server` | Construit **une** image : API compilée + frontend compilé |
-| `compose.server.yml` | Deux services : `app` (interne) et `https` (exposé) |
+| `compose.server.yml` | Trois services : `data-permissions` (préparation du volume), `app` (interne) et `https` (exposé) |
 | `Dockerfile.frontend` | Image Nginx pour un kiosque séparé |
 | `compose.frontend.yml` | Kiosque séparé uniquement |
 | `.dockerignore` | Exclut `node_modules`, `.env*`, `data`, tests |
@@ -51,14 +51,20 @@ en permanence.
 Conséquence : si vous changez l'utilisateur du conteneur, mettez aussi à jour ce
 service, sinon l'application ne pourra plus enregistrer la compta.
 
-### Durcissement commun
+### Durcissement
+
+Les trois services tournent en lecture seule et sans privilège
+(`no-new-privileges`, capacités retirées). Deux exceptions explicites :
+`CHOWN` pour `data-permissions` et `NET_BIND_SERVICE` pour Caddy. Réglages
+propres à `app` :
 
 ```yaml
 read_only: true                 # système de fichiers non modifiable
 cap_drop: [ALL]                 # aucune capacité Linux
 security_opt: [no-new-privileges:true]
 init: true
-tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+tmpfs:
+  - /tmp:rw,noexec,nosuid,size=64m
 ```
 
 L'application n'écrit que dans `/app/data` (volume) et `/tmp` (mémoire).
@@ -67,7 +73,7 @@ L'application n'écrit que dans `/app/data` (volume) et `/tmp` (mémoire).
 
 - `app` n'a **aucun** `ports:` : il n'est joignable que par Caddy.
 - `https` publie `80`, `443` et `443/udp`.
-- Les deux services partagent le réseau Compose par défaut ; Caddy joint
+- Les services partagent le réseau Compose par défaut ; Caddy joint
   `app:3000`.
 
 ### Commandes utiles
@@ -129,7 +135,7 @@ refuse.
 |---------|-------------|
 | Données Caddy | volume `caddy_data` |
 | Autorité locale | `/data/caddy/pki/authorities/local/root.crt` dans le volume |
-| Certificat fourni | `./certs/` sur l'hôte, monté en `/certs:ro` |
+| Certificat fourni | `./certs/` sur l'hôte, monté en `/certs:ro` (ligne à décommenter dans `compose.server.yml`) |
 
 Export de l'autorité locale :
 
@@ -140,7 +146,7 @@ Export de l'autorité locale :
 ### Journaux
 
 ```bash
-docker compose -f compose.server.yml logs https --tail=100
+docker compose -f compose.server.yml --env-file .env.server logs https --tail=100
 ```
 
 Messages importants :
@@ -206,7 +212,12 @@ window.MARCO_CONFIG = {"apiUrl":"/api/v1","apiToken":"…","deployment":"server"
 ### Routes
 
 Le détail est dans [marco-prime-backend/README.md](marco-prime-backend/README.md).
-Documentation interactive : `https://<domaine>/ui` (protégée par le jeton).
+
+Documentation interactive : `https://<domaine>/ui` et schéma brut sur
+`https://<domaine>/doc`. Ces deux routes sont **publiques** (déclarées avant
+l'authentification) : elles ne font que décrire l'API, sans donnée métier. Si
+vous préférez les masquer, bloquez-les dans `Caddyfile` ou placez-les derrière
+le jeton.
 
 ---
 

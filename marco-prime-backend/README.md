@@ -121,8 +121,13 @@ pnpm db:seed
 
 Une documentation Swagger UI interactive est disponible une fois le serveur démarré:
 
-- **Swagger UI**: http://localhost:3000/ui
+- **Swagger UI**: http://localhost:3000/ui (en production : `https://<domaine>/ui`)
 - **Spécification OpenAPI**: http://localhost:3000/doc
+
+Ces deux routes sont **publiques** : elles sont déclarées avant `authMiddleware`
+et ne nécessitent pas le jeton. Elles ne décrivent que les routes et les schémas,
+sans exposer de données. Pour les masquer sur un déploiement exposé, filtrez-les
+dans `Caddyfile`.
 
 ## Endpoints principaux
 
@@ -168,8 +173,12 @@ client identifié par RFID.
 La disponibilité Fouaille est partagée entre les caisses. La sélection des
 produits vendus ce soir est propre à la Marco. Les mutations de produits sont
 refusées si `FOUAILLE_SYNC_ENABLED=true`, car la synchronisation écraserait
-ces changements. Ces actions nécessitent des droits MySQL `INSERT` sur
-`members`/`products` et `UPDATE` sur `members.card_number`/`products.available`.
+ces changements.
+
+Droits MySQL du compte applicatif : `SELECT`, `INSERT` et `UPDATE` sur
+`members`, `products`, `product_types` et `orders`. Aucun `DELETE` n'est
+nécessaire en exploitation. `product_types` n'est écrit que par la
+synchronisation Fouaille, et seulement si elle est activée.
 
 ### Commandes
 - `GET /api/v1/history` - Historique paginé, filtrable par nom, produit, date ou numéro de transaction

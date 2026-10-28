@@ -166,9 +166,9 @@ SELECT 1;
 ```
 
 et posséder les droits habituels de Marco sur la base `BdeData` :
-`SELECT`, `INSERT`, `UPDATE` sur `members`, `products`, `product_types`,
-`orders` (voir `marco-prime-backend/README.md` pour les mutations
-administrateur).
+`SELECT`, `INSERT`, `UPDATE` sur `members`, `products`, `product_types` et
+`orders`. Aucun `DELETE` n'est nécessaire en exploitation (voir
+`marco-prime-backend/README.md` pour le détail des écritures).
 
 Demandez un **compte dédié** plutôt que d'utiliser le compte root ou un compte
 partagé. Format de l'URL :
@@ -265,12 +265,15 @@ Si l'école possède un certificat (souvent un *wildcard* `*.its-tps.fr`) :
    sudo chmod 640 /opt/Marco-Prime-Server/certs/*
    ```
 
-2. Montez le dossier dans Caddy. Ajoutez dans `compose.server.yml`, service
-   `https`, sous `volumes:` :
+2. Montez le dossier dans Caddy : dans `compose.server.yml`, service `https`,
+   sous `volumes:`, décommentez la ligne prévue :
 
    ```yaml
        - ./certs:/certs:ro
    ```
+
+   Sans ce montage, Caddy ne voit pas les fichiers et redémarre en boucle avec
+   `open /certs/fullchain.pem: no such file or directory`.
 
 3. Dans `.env.server` :
 
@@ -341,6 +344,10 @@ cd /opt/Marco-Prime-Server
 ```
 
 La première exécution construit l'image (2 à 5 minutes selon la machine).
+
+> Le script `./server` ajoute toujours `-f compose.server.yml --env-file
+> .env.server`. Si vous lancez Compose à la main, reprenez ces deux options :
+> sans `--env-file`, `MARCO_API_DOMAIN` est vide et Compose refuse de démarrer.
 
 Suivre la mise en route :
 
@@ -450,13 +457,20 @@ identifiants MySQL.
 
 ```bash
 ./server stop
-docker run --rm -v marco-prime-server_marco_server_data:/data \
-  -v "$PWD/backups:/backup" alpine:3.20 \
-  sh -c "rm -rf /data/* && tar xzf /backup/marco-data-AAAA.tar.gz -C /data"
+
+# Le nom du volume dépend du dossier de clone : on le retrouve au lieu de le coder.
+VOLUME=$(docker volume ls --format '{{.Name}}' | grep '_marco_server_data$')
+echo "$VOLUME"    # ex. marco-prime-server_marco_server_data
+
+docker run --rm -v "$VOLUME":/data -v "$PWD/backups:/backup" alpine:3.20 \
+  sh -c 'rm -rf /data/* && tar xzf /backup/marco-data-AAAA.tar.gz -C /data'
+
 ./server start
 ```
 
-Le nom exact du volume se vérifie avec :
+Le préfixe du volume est le nom du dossier de clone, en minuscules et avec des
+tirets (`Marco-Prime-Server` → `marco-prime-server`). Vérifiez-le avant la
+commande :
 
 ```bash
 docker volume ls | grep marco_server_data
@@ -481,7 +495,7 @@ Caddy joint le conteneur `app`, mais celui-ci ne répond pas.
 
 ```bash
 ./server logs          # chercher « Error » ou « DATABASE_URL »
-docker compose -f compose.server.yml ps
+./server status
 ```
 
 Causes usuelles :
@@ -499,8 +513,20 @@ docker compose -f compose.server.yml --env-file .env.server logs https --tail=50
 - `challenge failed` → domaine non joignable depuis Internet : passez en
   `internal` ou utilisez un certificat fourni.
 - `no such host` → DNS absent ou mal orthographié.
-- `permission denied` sur `/data` → le volume Caddy doit appartenir au
-  conteneur ; `./server stop && ./server start` recrée les volumes si besoin.
+- `permission denied` sur `/data` → le volume Caddy (`caddy_data`) a des droits
+  incorrects, souvent après un changement d'image. En dernier recours, recréez
+  uniquement les volumes Caddy (les certificats seront redemandés) :
+
+  ```bash
+  ./server stop
+  docker volume ls | grep caddy
+  docker volume rm <projet>_caddy_data <projet>_caddy_config
+  ./server start
+  ```
+
+  En mode `internal`, réexportez ensuite l'autorité (`./server cert`) et
+  réinstallez-la sur les appareils. `./server stop` seul ne supprime jamais les
+  volumes.
 
 ### Avertissement de certificat dans le navigateur
 
@@ -548,7 +574,7 @@ Fouaille.
 ### Le volume est en lecture seule / permission denied
 
 ```bash
-docker compose -f compose.server.yml ps
+./server status
 ```
 
 Le service `data-permissions` doit s'être terminé avec succès avant `app`. S'il
@@ -563,8 +589,8 @@ a échoué :
 
 ```bash
 ./server logs                                  # tout
-docker compose -f compose.server.yml logs app  # application
-docker compose -f compose.server.yml logs https # certificats et proxy
+docker compose -f compose.server.yml --env-file .env.server logs app   # application
+docker compose -f compose.server.yml --env-file .env.server logs https # certificats et proxy
 ```
 
 ---
@@ -582,5 +608,8 @@ docker volume rm marco-prime-server_marco_server_data \
 # Supprimer l'image
 docker image rm marco-prime-server:local
 ```
+
+Remplacez le préfixe `marco-prime-server_` par le nom de votre dossier de clone
+en minuscules (`docker volume ls` les liste).
 
 Faites une sauvegarde avant toute suppression de volume.

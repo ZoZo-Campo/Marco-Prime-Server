@@ -50,6 +50,9 @@ services:
       - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Cas A (certificat fourni par l'école) : copier fullchain.pem et
+      # privkey.pem dans ./certs/, puis décommenter la ligne suivante.
+      # - ./certs:/certs:ro
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped
