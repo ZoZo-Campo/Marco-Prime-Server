@@ -8,6 +8,7 @@ import { app } from "../src/index.js";
 import { db } from "../src/config/database.js";
 import { members, orders, products } from "../src/db/schema.js";
 import { productCostService } from "../src/services/product-cost.service.js";
+import { accountingService } from "../src/services/accounting.service.js";
 import { authenticatedOptions } from "./utils/helpers.js";
 
 describe("Statistics endpoints", () => {
@@ -17,6 +18,7 @@ describe("Statistics endpoints", () => {
   let memberCardNumber: number;
   let memberId: number;
   let productId: number;
+  let productName: string;
   let from: string;
   let to: string;
 
@@ -36,7 +38,7 @@ describe("Statistics endpoints", () => {
       .where(eq(members.admin, false))
       .limit(1);
     const [product] = await db
-      .select({ id: products.id })
+      .select({ id: products.id, name: products.name })
       .from(products)
       .orderBy(asc(products.id))
       .limit(1);
@@ -53,6 +55,7 @@ describe("Statistics endpoints", () => {
     memberCardNumber = member.cardNumber;
     memberId = member.id;
     productId = product.id;
+    productName = product.name;
     const start = new Date(latestOrder.date);
     start.setDate(start.getDate() - 1);
     const end = new Date(latestOrder.date);
@@ -63,6 +66,7 @@ describe("Statistics endpoints", () => {
 
   afterAll(async () => {
     productCostService.resetForTests();
+    accountingService.resetForTests();
     await rm(dataDirectory, { recursive: true, force: true });
   });
 
@@ -115,6 +119,96 @@ describe("Statistics endpoints", () => {
     expect(costs.find((product) => product.id === productId)?.costPrice).toBe(
       "1.23",
     );
+  });
+
+  it("links accounting rows to catalogue products and restores their canonical names", async () => {
+    const update = await client.api.v1.accounting.$put(
+      {
+        json: {
+          adminCardNumber,
+          eventName: "Soirée test",
+          eventDate: "2030-01-01",
+          rows: [
+            {
+              id: "f31efb78-158b-4f28-914f-8f42c86e98f9",
+              productId,
+              label: "Nom modifié dans le navigateur",
+              liters: "19.57",
+              purchasePricePerLiter: "3.14",
+              revenue: "63.80",
+            },
+          ],
+        },
+      },
+      authenticatedOptions,
+    );
+    expect(update.status).toBe(200);
+    const saved = await update.json();
+    expect(saved.rows[0]?.productId).toBe(productId);
+    expect(saved.rows[0]?.label).toBe(productName);
+
+    const read = await client.api.v1.accounting.$post(
+      { json: { adminCardNumber } },
+      authenticatedOptions,
+    );
+    expect(read.status).toBe(200);
+    expect((await read.json()).rows[0]?.label).toBe(productName);
+  });
+
+  it("exports accounting, sales, recharges and corrections for a date range", async () => {
+    const response = await client.api.v1.accounting.export.$post(
+      { json: { adminCardNumber, from, to } },
+      authenticatedOptions,
+    );
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.accounting).toHaveProperty("eventName");
+    expect(Array.isArray(result.sales)).toBe(true);
+    expect(Array.isArray(result.recharges)).toBe(true);
+    expect(Array.isArray(result.corrections)).toBe(true);
+  });
+
+  it("stores the accounting closure status", async () => {
+    const update = await client.api.v1.accounting.$put(
+      {
+        json: {
+          adminCardNumber,
+          status: "closed",
+          eventName: "Soirée clôturée",
+          eventDate: "2030-01-01",
+          rows: [],
+        },
+      },
+      authenticatedOptions,
+    );
+    expect(update.status).toBe(200);
+    const result = await update.json();
+    expect(result.status).toBe("closed");
+    expect(result.closedAt).not.toBeNull();
+  });
+
+  it("rejects an accounting row linked to an unknown product", async () => {
+    const response = await client.api.v1.accounting.$put(
+      {
+        json: {
+          adminCardNumber,
+          eventName: "Soirée test",
+          eventDate: "2030-01-01",
+          rows: [
+            {
+              id: "5c74c5c7-461e-41dc-a6e1-09c084b52a93",
+              productId: 2_147_483_647,
+              label: "Produit inexistant",
+              liters: "1",
+              purchasePricePerLiter: "1",
+              revenue: "1",
+            },
+          ],
+        },
+      },
+      authenticatedOptions,
+    );
+    expect(response.status).toBe(400);
   });
 
   it("normalizes current and legacy sales when calculating profit", async () => {

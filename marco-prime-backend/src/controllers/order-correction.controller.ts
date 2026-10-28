@@ -61,6 +61,12 @@ export class OrderCorrectionController {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
+      if (message === "CORRECTION_INSUFFICIENT_BALANCE") {
+        await orderCorrectionService.removePending(request.originalOrderId);
+        throw new HTTPException(402, {
+          message: "Solde insuffisant pour appliquer cette correction",
+        });
+      }
       if (message.startsWith("CORRECTION_")) {
         await orderCorrectionService.removePending(request.originalOrderId);
         throw new HTTPException(400, { message: "Cette vente ne peut pas être corrigée" });

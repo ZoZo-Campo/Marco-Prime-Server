@@ -9,6 +9,7 @@ import { customLogger } from "./config/logger.js";
 import { openApiSpec } from "./config/openapi.js";
 import { router } from "./config/router.js";
 import { db } from "./config/database.js";
+import { deploymentMode, envFileEditable } from "./config/deployment.js";
 import { authMiddleware } from "./middlewares/auth.middleware.js";
 import { errorHandler } from "./middlewares/error.middleware.js";
 import { limiter } from "./middlewares/rate-limiter.middleware.js";
@@ -41,6 +42,23 @@ export const app = new Hono()
   })
   .get("/doc", (c) => c.json(openApiSpec))
   .get("/ui", swaggerUI({ url: "/doc" }))
+  // Configuration lue par le frontend au chargement. En déploiement serveur,
+  // le frontend et l'API partagent la même origine : seul le jeton change.
+  .get("/runtime-config.js", (c) => {
+    const configuration = {
+      apiUrl: process.env.PUBLIC_API_URL || "/api/v1",
+      apiToken: process.env.API_TOKEN || "",
+      deployment: deploymentMode(),
+    };
+    return c.body(
+      `window.MARCO_CONFIG = ${JSON.stringify(configuration)};\n`,
+      200,
+      {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    );
+  })
   .use("/api/v1/*", authMiddleware)
   .route("/api/v1", router);
 
@@ -56,13 +74,18 @@ if (process.env.NODE_ENV === "production") {
 
 if (process.env.NODE_ENV !== "test") {
   startFouailleSynchronization();
+  const hostname = process.env.API_HOST || "127.0.0.1";
   serve(
     {
       fetch: app.fetch,
+      hostname,
       port: Number.parseInt(process.env.API_PORT || "3000"),
     },
     (info) => {
-      console.log(`Server is running on http://localhost:${info.port}`);
+      console.log(`Server is running on http://${hostname}:${info.port}`);
+      console.log(
+        `Deployment mode: ${deploymentMode()} (env editable: ${envFileEditable()})`,
+      );
     },
   );
 }

@@ -6,5 +6,6 @@
 **/dist/
 **/logs/
 **/data/
+backups/
+certs/
 .DS_Store
-

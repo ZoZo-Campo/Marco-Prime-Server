@@ -73,4 +73,34 @@ describe("History Endpoint", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("filters history by transaction number", async () => {
+    const initial = await client.api.v1.history.$get(
+      { query: { limit: "1" } },
+      authenticatedOptions,
+    );
+    const first = (await initial.json()).data[0];
+    if (!first) return;
+
+    const response = await client.api.v1.history.$get(
+      { query: { search: String(first.id), limit: "20" } },
+      authenticatedOptions,
+    );
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.data.some((order) => order.id === first.id)).toBe(true);
+  });
+
+  it("rejects an inverted history date range", async () => {
+    const response = await client.api.v1.history.$get(
+      {
+        query: {
+          from: "2030-01-02T00:00:00.000Z",
+          to: "2030-01-01T00:00:00.000Z",
+        },
+      },
+      authenticatedOptions,
+    );
+    expect(response.status).toBe(400);
+  });
 });

@@ -114,6 +114,11 @@ export class PurchaseController {
             message: "Un produit possède un prix invalide",
           });
         }
+        if (error.message === "INSUFFICIENT_BALANCE") {
+          throw new HTTPException(402, {
+            message: "Solde insuffisant : le paiement a été refusé",
+          });
+        }
       }
       throw error;
     }

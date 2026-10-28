@@ -7,6 +7,8 @@ import { purchaseResponseSchema } from "../../../schemas/purchase.schema";
 import { TICKET_ROUTE_URL } from "../../../pages/ticket";
 import { Button } from "../../ui/button";
 import { apiHeaders, apiUrl } from "../../../config/api";
+import { hasInsufficientBalance } from "../../../utils/validation";
+import { formatEuro } from "../../../utils/format";
 import {
   pendingPurchaseSignal,
   purchaseErrorSignal,
@@ -43,8 +45,14 @@ export function SubmitButton() {
   const { route } = useLocation();
   const { data, loading: memberLoading, clear } = useMember();
   const hasPendingPurchase = pendingPurchaseSignal.value !== null;
+  const hasInsufficientFunds = Boolean(
+    !hasPendingPurchase &&
+      data &&
+      hasInsufficientBalance(shopping.total.value, data.balance),
+  );
   const canSubmit = Boolean(
     !purchaseInProgressSignal.value &&
+      !hasInsufficientFunds &&
       (hasPendingPurchase ||
         (shopping.total.value > 0 && data && !memberLoading)),
   );
@@ -119,15 +127,17 @@ export function SubmitButton() {
 
   return (
     <Button
-      class="min-h-16 w-full text-xl font-bold shadow-md"
+      class="min-h-16 w-full rounded-2xl text-xl font-extrabold shadow-lg"
       disabled={!canSubmit}
       variant="default"
       onClick={handlePurchase}
     >
       {purchaseInProgressSignal.value ? (
         <Loader2 class="size-5 animate-spin" />
+      ) : hasInsufficientFunds ? (
+        "Solde insuffisant"
       ) : (
-        `${hasPendingPurchase ? "Réessayer" : "Payer"} ${shopping.total.value.toFixed(2)}€`
+        `${hasPendingPurchase ? "Réessayer" : "Payer"} ${formatEuro(shopping.total.value)}`
       )}
     </Button>
   );

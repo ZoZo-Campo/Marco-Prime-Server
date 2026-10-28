@@ -16,18 +16,73 @@ import {
 
 type LayoutProps = PropsWithChildren;
 
+/** Retour à l'accueil après inactivité (l'accueil fait office d'écran d'attente). */
+const IDLE_RESET_MS = 120_000;
+
 export function Layout({ children }: LayoutProps) {
-  const { route } = useLocation();
+  const { path, route } = useLocation();
+
+  // Garde anti-clavier : quand le clavier se rétracte, Chrome peut laisser le
+  // viewport décalé vers le bas (liseré en haut + clavier qui rejaillit au
+  // prochain tap). On recentre le scroll dès que le clavier disparaît, y
+  // compris après un simple blur (focusout), sans attendre un tap ailleurs.
+  useEffect(() => {
+    const visualViewport = window.visualViewport;
+    if (!visualViewport) return;
+    let fullHeight = Math.max(window.innerHeight, visualViewport.height);
+    let keyboardVisible = false;
+
+    const resetPageScroll = () => {
+      window.scrollTo(0, 0);
+      const scrollingElement = document.scrollingElement;
+      if (scrollingElement) scrollingElement.scrollTop = 0;
+    };
+
+    const onResize = () => {
+      const currentInner = window.innerHeight;
+      if (currentInner > fullHeight) fullHeight = currentInner;
+      const hasKeyboard = fullHeight - visualViewport.height > 120;
+      if (hasKeyboard) {
+        keyboardVisible = true;
+      } else if (keyboardVisible) {
+        keyboardVisible = false;
+        resetPageScroll();
+      }
+    };
+
+    const onScroll = () => {
+      if (!keyboardVisible && visualViewport.offsetTop > 0) {
+        resetPageScroll();
+      }
+    };
+
+    const onFocusOut = () => {
+      window.setTimeout(() => {
+        if (!keyboardVisible) resetPageScroll();
+      }, 80);
+    };
+
+    visualViewport.addEventListener("resize", onResize);
+    visualViewport.addEventListener("scroll", onScroll);
+    window.addEventListener("resize", onResize);
+    document.addEventListener("focusout", onFocusOut);
+    return () => {
+      visualViewport.removeEventListener("resize", onResize);
+      visualViewport.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("focusout", onFocusOut);
+    };
+  }, []);
 
   useEffect(() => {
-    let timeout = window.setTimeout(resetSession, 120_000);
+    let timeout = window.setTimeout(resetSession, IDLE_RESET_MS);
 
     function resetSession() {
       if (
         purchaseInteractionLockedSignal.value ||
         rechargeInteractionLockedSignal.value
       ) {
-        timeout = window.setTimeout(resetSession, 120_000);
+        timeout = window.setTimeout(resetSession, IDLE_RESET_MS);
         return;
       }
       shopping.reset();
@@ -39,7 +94,7 @@ export function Layout({ children }: LayoutProps) {
 
     function refreshTimeout() {
       window.clearTimeout(timeout);
-      timeout = window.setTimeout(resetSession, 120_000);
+      timeout = window.setTimeout(resetSession, IDLE_RESET_MS);
     }
 
     window.addEventListener("keydown", refreshTimeout);
@@ -52,8 +107,10 @@ export function Layout({ children }: LayoutProps) {
   }, []);
 
   return (
-    <div class="w-screen h-screen flex flex-col overflow-hidden">
-      <main class="flex-1 flex overflow-auto">{children}</main>
+    <div class="app-shell w-screen flex flex-col overflow-hidden">
+      <main key={path} class="flex-1 flex min-h-0 overflow-auto view-enter">
+        {children}
+      </main>
       <NavBar />
     </div>
   );

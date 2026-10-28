@@ -2,10 +2,13 @@
 set -Eeuo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 ENV_FILE="${ROOT}/.env.server"
+COMPOSE_FILE="${ROOT}/compose.server.yml"
 
 if docker compose version >/dev/null 2>&1; then COMPOSE=(docker compose)
 elif command -v docker-compose >/dev/null 2>&1; then COMPOSE=(docker-compose)
 else echo "Docker Compose est absent."; exit 1; fi
+
+compose() { "${COMPOSE[@]}" -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" "$@"; }
 
 if [[ ! -f "${ENV_FILE}" ]]; then
   cp "${ROOT}/.env.server.example" "${ENV_FILE}"
@@ -17,12 +20,35 @@ if grep -q 'REPLACE_HERE' "${ENV_FILE}"; then
   echo ".env.server contient encore REPLACE_HERE."; exit 1
 fi
 
+domain() {
+  grep -m1 '^MARCO_API_DOMAIN=' "${ENV_FILE}" | cut -d= -f2- | tr -d '"' | tr -d "'"
+}
+
 case "${1:-help}" in
-  start) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" up -d --build ;;
-  rebuild|restart) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" up -d --build --force-recreate ;;
-  stop) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" down ;;
-  status) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" ps ;;
-  logs) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" logs -f --tail=100 ;;
-  check) "${COMPOSE[@]}" -f "${ROOT}/compose.server.yml" --env-file "${ENV_FILE}" config --quiet && echo "Configuration serveur valide." ;;
-  *) echo "Usage : ./server {start|rebuild|restart|stop|status|logs|check}" ;;
+  start) compose up -d --build ;;
+  rebuild|restart) compose up -d --build --force-recreate ;;
+  stop) compose down ;;
+  status) compose ps ;;
+  logs) compose logs -f --tail=100 ;;
+  check) compose config --quiet && echo "Configuration serveur valide." ;;
+
+  # Sauvegarde du volume de données : catalogue, compta, prix d'achat, journal.
+  backup)
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    target="${ROOT}/backups/marco-data-${stamp}.tar.gz"
+    mkdir -p "${ROOT}/backups"
+    compose exec -T app tar czf - -C /app/data . > "${target}"
+    echo "Sauvegarde écrite : ${target}"
+    ;;
+
+  # Exporte l'autorité locale Caddy, à installer sur les appareils clients.
+  cert)
+    mkdir -p "${ROOT}/certs"
+    compose exec -T https cat /data/caddy/pki/authorities/local/root.crt \
+      > "${ROOT}/certs/marco-caddy-root.crt"
+    echo "Autorité exportée : ${ROOT}/certs/marco-caddy-root.crt"
+    ;;
+
+  url) echo "https://$(domain)/" ;;
+  *) echo "Usage : ./server {start|rebuild|restart|stop|status|logs|check|backup|cert|url}" ;;
 esac

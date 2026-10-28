@@ -25,3 +25,10 @@ export const cardNumberParamSchema = z.object({
       message: "Card number must be a positive safe integer",
     }),
 });
+
+export const memberSearchSchema = z.object({
+  query: z.string().trim().max(80),
+  promotion: z.number().int().min(2000).max(2100).optional(),
+}).refine(({ query, promotion }) => query.length >= 1 || promotion !== undefined, {
+  message: "Saisir au moins un caractère ou choisir une promotion",
+});

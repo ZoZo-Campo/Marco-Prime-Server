@@ -2,9 +2,10 @@ import type { Context } from "hono";
 import type { z } from "zod";
 import { HTTPException } from "hono/http-exception";
 import { MemberRepository } from "../repositories/member.repository.js";
-import { cardNumberParamSchema } from "../validators/members.validator.js";
+import { cardNumberParamSchema, memberSearchSchema } from "../validators/members.validator.js";
 
 type MemberParamRequest = z.infer<typeof cardNumberParamSchema>;
+type MemberSearchRequest = z.infer<typeof memberSearchSchema>;
 
 export class MemberController {
   private memberRepository = new MemberRepository();
@@ -21,5 +22,17 @@ export class MemberController {
     }
 
     return c.json(member);
+  }
+
+  async searchMembers(c: Context) {
+    const { query, promotion } = c.req.valid(
+      "json" as never,
+    ) as MemberSearchRequest;
+
+    return c.json(await this.memberRepository.search(query, 20, promotion));
+  }
+
+  async listPromotions(c: Context) {
+    return c.json(await this.memberRepository.listPromotions());
   }
 }

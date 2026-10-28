@@ -27,6 +27,8 @@ export const rechargeResponseSchema = z.object({
     amount: positiveMoneyStringSchema,
     previousBalance: moneyStringSchema,
     newBalance: moneyStringSchema,
+    paymentMethod: z.enum(["card", "cash"]),
+    paymentMethodRecorded: z.boolean(),
   }).superRefine((transaction, context) => {
     const amount = moneyToCents(transaction.amount);
     const previous = moneyToCents(transaction.previousBalance);

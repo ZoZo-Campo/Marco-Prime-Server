@@ -32,6 +32,7 @@ export function Keypad({
     <div class="grid grid-cols-3 gap-2">
       {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((digit) => (
         <Button
+          type="button"
           key={digit}
           variant="outline"
           size="lg"
@@ -43,6 +44,7 @@ export function Keypad({
         </Button>
       ))}
       <Button
+        type="button"
         variant="destructive"
         size="lg"
         class="text-sm font-bold h-14"
@@ -52,6 +54,7 @@ export function Keypad({
         CLR
       </Button>
       <Button
+        type="button"
         variant="outline"
         size="lg"
         class="text-2xl font-bold h-14"
@@ -61,6 +64,7 @@ export function Keypad({
         0
       </Button>
       <Button
+        type="button"
         variant="outline"
         size="lg"
         class="h-14"

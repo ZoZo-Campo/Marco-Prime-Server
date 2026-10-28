@@ -5,9 +5,11 @@ export type PendingRecharge = {
   cardNumber: number;
   adminCardNumber?: number;
   amount: number;
+  paymentMethod: "card" | "cash";
 };
 
 export const rechargeAmountSignal = signal("");
+export const rechargePaymentMethodSignal = signal<"card" | "cash">("card");
 export const rechargeInProgressSignal = signal(false);
 export const waitingForAdminSignal = signal(false);
 export const rechargeErrorSignal = signal<string | null>(null);
@@ -23,6 +25,7 @@ export const rechargeInteractionLockedSignal = computed(
 export function resetRechargeState() {
   if (rechargeInProgressSignal.value) return;
   rechargeAmountSignal.value = "";
+  rechargePaymentMethodSignal.value = "card";
   waitingForAdminSignal.value = false;
   rechargeErrorSignal.value = null;
   pendingRechargeSignal.value = null;

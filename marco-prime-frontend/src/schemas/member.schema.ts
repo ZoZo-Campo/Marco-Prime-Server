@@ -9,7 +9,12 @@ export const memberSchema = z.object({
   cardNumber: z.coerce.number().int().positive().safe(),
   balance: moneyStringSchema,
   admin: z.coerce.boolean(),
+  contributor: z.coerce.boolean().default(true),
+  class: z.number().nullable().optional(),
+  isBirthday: z.boolean().optional().default(false),
 });
+
+export const memberListSchema = z.array(memberSchema);
 
 // Type exporté pour utilisation dans les composants
 export type MemberSchema = z.infer<typeof memberSchema>;

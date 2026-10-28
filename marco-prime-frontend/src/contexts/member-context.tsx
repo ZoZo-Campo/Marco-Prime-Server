@@ -1,11 +1,14 @@
 import { createContext } from "preact";
 import type { PropsWithChildren } from "preact/compat";
-import { useContext, useEffect, useState } from "preact/hooks";
+import { useContext, useEffect, useRef, useState } from "preact/hooks";
 import type z from "zod";
 import { useApi } from "../hooks/use-api";
 import { useRfid } from "../hooks/use-rfid";
 import { memberSchema } from "../schemas/member.schema";
+import type { MemberSchema } from "../schemas/member.schema";
 import { apiUrl } from "../config/api";
+import { shopping } from "./shopping-context";
+import { addRecentMember } from "../utils/recent-members";
 
 const MemberContext = createContext<{
   data: z.infer<typeof memberSchema> | null;
@@ -14,9 +17,11 @@ const MemberContext = createContext<{
   inputLength: number;
   paused: boolean;
   retry: () => Promise<void>;
+  submitCardNumber: (cardNumber: string) => boolean;
   clear: () => void;
   pause: () => void;
   resume: () => void;
+  select: (member: MemberSchema) => void;
 } | null>(null);
 
 export function useMember() {
@@ -31,10 +36,14 @@ export function MemberProvider({
   disabled = false,
 }: PropsWithChildren<{ disabled?: boolean }>) {
   const [paused, setPaused] = useState(false);
+  const [selectedMember, setSelectedMember] = useState<MemberSchema | null>(
+    null,
+  );
   const {
     value: memberCardId,
     scanId,
     inputLength,
+    submit: submitRfid,
     clear: clearRfid,
   } = useRfid({ disabled: paused || disabled });
   const { data: fetchedMember, loading, error, refetch, reset } = useApi(
@@ -42,21 +51,48 @@ export function MemberProvider({
     apiUrl(`member/${memberCardId}`),
     { immediate: false },
   );
-  const data =
+  const scannedMember =
     memberCardId !== undefined &&
     fetchedMember?.cardNumber === Number(memberCardId)
       ? fetchedMember
       : null;
+  const data = selectedMember ?? scannedMember;
+
+  const lastCardRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (memberCardId) refetch();
+    if (data) addRecentMember(data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.id]);
+
+  useEffect(() => {
+    if (!memberCardId) return;
+    const nextCard = String(memberCardId);
+    if (lastCardRef.current !== undefined && lastCardRef.current !== nextCard) {
+      shopping.reset();
+    }
+    lastCardRef.current = nextCard;
+    setSelectedMember(null);
+    refetch();
   }, [memberCardId, scanId]);
 
   const pause = () => setPaused(true);
   const resume = () => setPaused(false);
   const clear = () => {
+    setSelectedMember(null);
     clearRfid();
     reset();
+  };
+  const submitCardNumber = (cardNumber: string) => {
+    setSelectedMember(null);
+    reset();
+    return submitRfid(cardNumber);
+  };
+  const select = (member: MemberSchema) => {
+    clearRfid();
+    reset();
+    setSelectedMember(member);
+    setPaused(false);
   };
 
   return (
@@ -68,9 +104,11 @@ export function MemberProvider({
         inputLength,
         paused,
         retry: refetch,
+        submitCardNumber,
         clear,
         pause,
         resume,
+        select,
       }}
     >
       {children}

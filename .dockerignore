@@ -4,4 +4,6 @@
 **/.env*
 **/data
 **/logs
-
+**/tests
+backups
+certs

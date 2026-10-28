@@ -37,6 +37,7 @@ export const productCostListSchema = z.array(
   z.object({
     id: z.number().int().positive(),
     name: z.string(),
+    productTypeId: z.number().int().positive(),
     category: z.string(),
     sellingPrice: moneyStringSchema,
     available: z.boolean(),

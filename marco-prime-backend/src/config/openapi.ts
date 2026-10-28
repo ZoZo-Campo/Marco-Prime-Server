@@ -34,6 +34,7 @@ export const openApiSpec = {
           cardNumber: { type: "number" },
           balance: { type: "string" },
           admin: { type: "boolean" },
+          contributor: { type: "boolean" },
         },
       },
       Product: {
@@ -73,6 +74,113 @@ export const openApiSpec = {
         },
       },
     },
+    "/ready": {
+      get: {
+        summary: "Readiness check",
+        description: "Check the API and the MySQL connection",
+        tags: ["Health"],
+        responses: {
+          "200": { description: "API and database ready" },
+          "500": { description: "Database unavailable" },
+        },
+      },
+    },
+    "/api/v1/system/status": {
+      get: {
+        summary: "Backend, database and Fouaille status",
+        tags: ["System"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Service availability and latency" },
+        },
+      },
+    },
+    "/api/v1/system/env/status": {
+      post: {
+        summary: "Read the masked .env status",
+        description:
+          "Returns whether .env exists, its API port, auth mode, database host/name (never the password) and local data directory. Administrator card required.",
+        tags: ["System"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["adminCardNumber"],
+                properties: {
+                  adminCardNumber: { type: "integer" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Masked configuration status" },
+          "403": { description: "Administrator card required" },
+        },
+      },
+    },
+    "/api/v1/system/env/validate": {
+      post: {
+        summary: "Validate an imported .env",
+        description:
+          "Checks the allowed keys, required tablet values, and tests the MySQL connection without writing the file. Administrator card required.",
+        tags: ["System"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["adminCardNumber", "content"],
+                properties: {
+                  adminCardNumber: { type: "integer" },
+                  content: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Validation result and tested database" },
+          "400": { description: "Invalid .env content" },
+          "403": { description: "Administrator card required" },
+        },
+      },
+    },
+    "/api/v1/system/env": {
+      post: {
+        summary: "Import a .env and restart Marco",
+        description:
+          "Validates the content, tests MySQL, backs up the previous .env, writes the new one with 0600 permissions, then schedules a server restart. Administrator card required.",
+        tags: ["System"],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["adminCardNumber", "content"],
+                properties: {
+                  adminCardNumber: { type: "integer" },
+                  content: { type: "string" },
+                  restart: { type: "boolean", default: true },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Configuration imported and restart scheduled" },
+          "400": { description: "Invalid configuration" },
+          "403": { description: "Administrator card required" },
+        },
+      },
+    },
     "/api/v1/member/{card_number}": {
       get: {
         summary: "Get member by card number",
@@ -105,6 +213,85 @@ export const openApiSpec = {
             },
           },
         },
+      },
+    },
+    "/api/v1/members/search": {
+      post: {
+        summary: "Search members by name and/or promotion",
+        description:
+          "Kiosk member lookup used when a customer has no RFID card",
+        tags: ["Members"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Matching card-enabled members" },
+        },
+      },
+    },
+    "/api/v1/admin/promotions": {
+      post: {
+        summary: "List member promotions",
+        description: "Administrator card required in JSON body",
+        tags: ["Members"],
+        security: [{ bearerAuth: [] }],
+        responses: { "200": { description: "Promotions and member counts" }, "403": { description: "Administrator card required" } },
+      },
+    },
+    "/api/v1/admin/members/search": {
+      post: {
+        summary: "Find members, including those without a badge",
+        description: "Filter by name and/or promotion; administrator card required",
+        tags: ["Members"],
+        security: [{ bearerAuth: [] }],
+        responses: { "200": { description: "Matching members" }, "403": { description: "Administrator card required" } },
+      },
+    },
+    "/api/v1/admin/members": {
+      post: {
+        summary: "Create a Fouaille member with zero balance",
+        tags: ["Members"],
+        security: [{ bearerAuth: [] }],
+        responses: { "201": { description: "Member created" }, "409": { description: "Duplicate email or badge" } },
+      },
+    },
+    "/api/v1/admin/members/badge": {
+      put: {
+        summary: "Assign or replace a member badge",
+        description: "Keeps the same account, balance and order history",
+        tags: ["Members"],
+        security: [{ bearerAuth: [] }],
+        responses: { "200": { description: "Badge changed" }, "409": { description: "Badge conflict or stale record" } },
+      },
+    },
+    "/api/v1/admin/product-types": {
+      post: {
+        summary: "List all Fouaille product categories",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        responses: { "200": { description: "Product categories" } },
+      },
+    },
+    "/api/v1/admin/products": {
+      post: {
+        summary: "Create a Fouaille product, unavailable by default",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        responses: { "201": { description: "Product created" }, "409": { description: "Duplicate product" } },
+      },
+    },
+    "/api/v1/admin/products/availability": {
+      put: {
+        summary: "Change global Fouaille product availability",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        responses: { "200": { description: "Availability changed" }, "409": { description: "Concurrent change or automatic synchronization active" } },
+      },
+    },
+    "/api/v1/admin/products/price": {
+      put: {
+        summary: "Change a Fouaille product price after checking its current price",
+        tags: ["Products"],
+        security: [{ bearerAuth: [] }],
+        responses: { "200": { description: "Price changed" }, "409": { description: "Price changed concurrently or automatic synchronization active" } },
       },
     },
     "/api/v1/products": {
@@ -232,6 +419,22 @@ export const openApiSpec = {
             in: "query",
             schema: { type: "integer", default: 20 },
           },
+          {
+            name: "search",
+            in: "query",
+            description: "Member name, product name or exact transaction number",
+            schema: { type: "string", maxLength: 100 },
+          },
+          {
+            name: "from",
+            in: "query",
+            schema: { type: "string", format: "date-time" },
+          },
+          {
+            name: "to",
+            in: "query",
+            schema: { type: "string", format: "date-time" },
+          },
         ],
         responses: {
           "200": {
@@ -306,12 +509,26 @@ export const openApiSpec = {
       put: {
         summary: "Save the local real-world accounting table",
         description:
-          "Stores measured liters, purchase price per liter and actual revenue without modifying Fouaille",
+          "Stores the auto-saved accounting draft, its closure status, measured liters, purchase price per liter and actual revenue without modifying Fouaille",
         tags: ["Accounting"],
         security: [{ bearerAuth: [] }],
         responses: {
           "200": { description: "Accounting table saved" },
           "400": { description: "Invalid accounting row" },
+          "403": { description: "Administrator card required" },
+        },
+      },
+    },
+    "/api/v1/accounting/export": {
+      post: {
+        summary: "Export a complete evening data set",
+        description:
+          "Returns the local accounting table plus normalized sales, recharges and correction records for the requested range",
+        tags: ["Accounting"],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": { description: "Data used to generate the four CSV files and JSON backup" },
+          "400": { description: "Invalid date range" },
           "403": { description: "Administrator card required" },
         },
       },
@@ -337,6 +554,7 @@ export const openApiSpec = {
         responses: {
           "201": { description: "Correction completed" },
           "400": { description: "Purchase cannot be corrected" },
+          "402": { description: "Correction would make the member balance negative" },
           "403": { description: "Administrator card required" },
           "409": { description: "Purchase already corrected or pending review" },
           "503": { description: "Result uncertain; manual review required" },
@@ -382,6 +600,9 @@ export const openApiSpec = {
           },
           "400": {
             description: "Bad request",
+          },
+          "402": {
+            description: "Insufficient member balance",
           },
           "404": {
             description: "Product or member not found",

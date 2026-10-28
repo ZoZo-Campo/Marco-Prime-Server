@@ -1,6 +1,6 @@
 import { useLocation } from "preact-iso";
 import { useEffect } from "preact/hooks";
-import { AlertTriangle, Loader2, CreditCard } from "lucide-preact";
+import { AlertTriangle, Loader2, ShieldCheck } from "lucide-preact";
 import { MemberProvider, useMember } from "../contexts/member-context";
 import { setTicket } from "../contexts/ticket-context";
 import { useRfid } from "../hooks/use-rfid";
@@ -10,9 +10,14 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { TICKET_ROUTE_URL } from "./ticket";
 import { apiHeaders, apiUrl } from "../config/api";
+import { MemberSearch } from "../components/features/member/member-search";
+import { QrScanButton } from "../components/features/member/qr-scan-button";
+import { BirthdayBadge } from "../components/features/member/birthday-badge";
+import { CardCodeEntry } from "../components/features/buy/card-code-entry";
 import {
   pendingRechargeSignal,
   rechargeAmountSignal,
+  rechargePaymentMethodSignal,
   rechargeErrorSignal,
   rechargeInProgressSignal,
   rechargeInteractionLockedSignal,
@@ -22,6 +27,8 @@ import {
 } from "../contexts/recharge-state";
 
 export const RECHARGE_ROUTE_URL = "/recharge";
+
+const RECHARGE_PRESETS = [5, 10, 15, 20, 50, 100] as const;
 
 export function RechargePage() {
   return (
@@ -73,6 +80,7 @@ function RechargeContent() {
         transactionId: crypto.randomUUID(),
         cardNumber: member.cardNumber,
         amount: Number(rechargeAmountSignal.value),
+        paymentMethod: rechargePaymentMethodSignal.value,
         ...(adminCardNumber ? { adminCardNumber } : {}),
       } satisfies PendingRecharge;
       pendingRechargeSignal.value = rechargeRequest;
@@ -171,14 +179,32 @@ function RechargeContent() {
   );
 
   return (
-    <div class="grid grid-cols-[1fr_300px] flex-1 min-h-0 overflow-hidden">
+    <div class="flex flex-1 min-h-0 flex-col overflow-y-auto lg:grid lg:grid-cols-[1fr_300px] lg:overflow-hidden">
       {/* Left side - Keypad */}
-      <div class="px-7 py-5 flex flex-col gap-5 items-center justify-center">
+      <div class="flex flex-col items-center justify-center gap-5 px-4 py-5 sm:px-7">
         <p class="text-muted-foreground text-sm">Montant à recharger</p>
         <p class="text-6xl font-bold mb-4">
           {amount > 0 ? `${amount.toFixed(2)} €` : "0.00 €"}
         </p>
-        <div class="w-72">
+        <div class="grid w-full max-w-xs grid-cols-3 gap-2">
+          {RECHARGE_PRESETS.map((preset) => (
+            <Button
+              key={preset}
+              type="button"
+              variant={
+                rechargeAmountSignal.value === String(preset)
+                  ? "default"
+                  : "outline"
+              }
+              class="h-11 text-base font-semibold"
+              onClick={() => (rechargeAmountSignal.value = String(preset))}
+              disabled={rechargeInteractionLockedSignal.value}
+            >
+              {preset} €
+            </Button>
+          ))}
+        </div>
+        <div class="w-full max-w-xs">
           <Keypad
             value={rechargeAmountSignal.value}
             onChange={(v) => (rechargeAmountSignal.value = v)}
@@ -188,8 +214,15 @@ function RechargeContent() {
       </div>
 
       {/* Right side - Aside */}
-      <aside class="border-l bg-card px-7 py-5 flex flex-col gap-5">
+      <aside class="flex flex-col gap-5 border-t bg-card px-4 py-5 sm:px-7 lg:border-l lg:border-t-0">
         <h2 class="text-xl font-semibold">Rechargement</h2>
+        <fieldset disabled={rechargeInteractionLockedSignal.value} class="space-y-2">
+          <legend class="text-sm font-medium">Paiement reçu</legend>
+          <div class="grid grid-cols-2 gap-2">
+            <Button type="button" variant={rechargePaymentMethodSignal.value === "card" ? "default" : "outline"} onClick={() => rechargePaymentMethodSignal.value = "card"}>CB</Button>
+            <Button type="button" variant={rechargePaymentMethodSignal.value === "cash" ? "default" : "outline"} onClick={() => rechargePaymentMethodSignal.value = "cash"}>Espèces</Button>
+          </div>
+        </fieldset>
 
         {/* Member info */}
         {member ? (
@@ -200,6 +233,7 @@ function RechargeContent() {
             <p class="text-sm text-muted-foreground">
               Carte: {member.cardNumber}
             </p>
+            {member.isBirthday && <BirthdayBadge firstName={member.firstName} />}
           </Card>
         ) : (
           <Card class="gap-2 py-4 px-4">
@@ -228,6 +262,7 @@ function RechargeContent() {
                   : "Scannez une carte, ou saisissez son numéro puis appuyez sur Entrée."}
               </p>
             )}
+            <MemberSearch />
           </Card>
         )}
 
@@ -273,11 +308,11 @@ function RechargeContent() {
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <Card class="w-96 gap-4 py-6">
             <div class="px-6 text-center">
-              <CreditCard class="size-16 mx-auto mb-4 text-primary" />
-              <h2 class="text-xl font-bold mb-2">Carte admin requise</h2>
+              <ShieldCheck class="size-12 mx-auto mb-3 text-primary" />
+              <h2 class="text-xl font-bold mb-2">Autorisation administrateur</h2>
               <p class="text-muted-foreground">
-                Veuillez scanner une carte administrateur pour valider le
-                rechargement
+                La carte RFID reste active en arrière-plan. Vous pouvez aussi
+                scanner le QR admin ou saisir son code.
               </p>
             </div>
             <div class="px-6 py-4 border-t border-b text-center">
@@ -287,6 +322,25 @@ function RechargeContent() {
               </p>
             </div>
             <div class="px-6">
+              <QrScanButton
+                label="Scanner le QR admin"
+                onSubmit={(adminCode) => {
+                  processRecharge(Number(adminCode));
+                  return false;
+                }}
+              />
+              <p class="mb-3 mt-4 text-sm text-muted-foreground">
+                Ou saisissez le code de la carte admin sur le pavé :
+              </p>
+              <CardCodeEntry
+                title="Code admin"
+                onSubmit={(adminCode) => {
+                  processRecharge(Number(adminCode));
+                  return false;
+                }}
+              />
+            </div>
+            <div class="px-6 mt-3">
               <Button variant="outline" class="w-full" onClick={handleCancel}>
                 Annuler
               </Button>

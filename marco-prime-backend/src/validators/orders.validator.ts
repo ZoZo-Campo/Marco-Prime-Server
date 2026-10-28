@@ -42,6 +42,20 @@ export const paginationQuerySchema = z.object({
     .default(20),
 });
 
+export const historyQuerySchema = paginationQuerySchema.extend({
+  search: z.string().trim().max(100).optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
+}).superRefine(({ from, to }, context) => {
+  if (from && to && new Date(to) <= new Date(from)) {
+    context.addIssue({
+      code: "custom",
+      path: ["to"],
+      message: "The end date must be after the start date",
+    });
+  }
+});
+
 export const paginatedResponseSchema = z.object({
   data: z.array(orderSchema),
   pagination: z.object({

@@ -1,18 +1,22 @@
 import type { ComponentChildren } from "preact";
 import {
-  AlertCircle,
   BarChart3,
   Calculator,
   Check,
-  CreditCard,
-  PencilLine,
   Loader2,
+  Package,
+  Power,
+  RefreshCw,
   Save,
+  Search,
+  Server,
   ShieldAlert,
   ShoppingBasket,
+  UsersRound,
+  X,
 } from "lucide-preact";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { apiHeaders, apiUrl } from "../config/api";
+import { apiHeaders, apiUrl, ENV_EDITABLE } from "../config/api";
 import { MemberProvider, useMember } from "../contexts/member-context";
 import { useApi } from "../hooks/use-api";
 import {
@@ -24,12 +28,16 @@ import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
 import { StatisticsPanel } from "../components/features/config/statistics-panel";
 import { AccountingPanel } from "../components/features/config/accounting-panel";
-import { OrderCorrectionsPanel } from "../components/features/config/order-corrections-panel";
+import { MembersPanel } from "../components/features/config/members-panel";
+import { FouailleProductsPanel } from "../components/features/config/fouaille-products-panel";
+import { SetupPanel } from "../components/features/config/setup-panel";
+import { AdminAuthPanel } from "../components/features/auth/admin-auth-panel";
 
 export const CONFIG_ROUTE_URL = "/config";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
-type AdminSection = "catalog" | "statistics" | "accounting" | "corrections";
+type AdminSection = "catalog" | "statistics" | "accounting" | "members" | "fouaille-products" | "setup";
+const KIOSK_CONTROL_URL = "http://127.0.0.1:3210";
 
 export function ConfigPage() {
   return (
@@ -40,15 +48,11 @@ export function ConfigPage() {
 }
 
 function ConfigContent() {
-  const {
-    data: member,
-    loading: memberLoading,
-    error: memberError,
-    inputLength,
-    retry,
-    clear,
-  } = useMember();
+  const { data: member, pause } = useMember();
   const isAdmin = member?.admin === true;
+  useEffect(() => {
+    if (isAdmin) pause();
+  }, [isAdmin]);
   const {
     data: catalog,
     loading: catalogLoading,
@@ -58,9 +62,39 @@ function ConfigContent() {
     immediate: isAdmin,
   });
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [catalogQuery, setCatalogQuery] = useState("");
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [editingPrice, setEditingPrice] = useState<CatalogSelectionProduct | null>(null);
+  const [priceDraft, setPriceDraft] = useState("");
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const [priceNotice, setPriceNotice] = useState<string | null>(null);
+  const [priceSaving, setPriceSaving] = useState(false);
   const [section, setSection] = useState<AdminSection>("catalog");
+  const [kioskControlAvailable, setKioskControlAvailable] = useState(false);
+  const [showExitDialog, setShowExitDialog] = useState(false);
+  const [closingKiosk, setClosingKiosk] = useState(false);
+  const [kioskExitError, setKioskExitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setKioskControlAvailable(false);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 1_500);
+    fetch(`${KIOSK_CONTROL_URL}/status`, {
+      signal: controller.signal,
+      cache: "no-store",
+    })
+      .then((response) => setKioskControlAvailable(response.ok))
+      .catch(() => setKioskControlAvailable(false))
+      .finally(() => window.clearTimeout(timer));
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [isAdmin]);
 
   useEffect(() => {
     if (!catalog) return;
@@ -75,51 +109,23 @@ function ConfigContent() {
   }, [catalog]);
 
   const categories = useMemo(() => groupByCategory(catalog ?? []), [catalog]);
-
-  if (!member) {
-    return (
-      <CenteredCard>
-        {memberLoading ? (
-          <Loader2 class="size-14 animate-spin text-primary" />
-        ) : memberError ? (
-          <AlertCircle class="size-16 text-destructive" />
-        ) : (
-          <CreditCard class="size-16 text-primary" />
-        )}
-        <h1 class="text-3xl font-bold">Configuration des ventes</h1>
-        {memberError ? (
-          <>
-            <p class="max-w-xl text-center text-lg text-destructive">
-              Carte inconnue ou serveur indisponible.
-            </p>
-            <div class="flex gap-3">
-              <Button variant="outline" onClick={() => void retry()}>
-                Réessayer
-              </Button>
-              <Button onClick={clear}>Saisir une autre carte</Button>
-            </div>
-          </>
-        ) : (
-          <p class="max-w-xl text-center text-lg text-muted-foreground">
-            {inputLength > 0
-              ? `Saisie en cours : ${inputLength} chiffre${inputLength > 1 ? "s" : ""}. Appuyez sur Entrée.`
-              : "Scannez une carte administrateur, ou saisissez son numéro puis appuyez sur Entrée."}
-          </p>
-        )}
-      </CenteredCard>
-    );
-  }
+  const filteredCategories = useMemo(() => {
+    const needle = catalogQuery.trim().toLocaleLowerCase("fr");
+    if (!needle) return categories;
+    return categories.map((category) => ({
+      ...category,
+      products: category.products.filter((product) =>
+        `${product.name} ${product.title}`.toLocaleLowerCase("fr").includes(needle)),
+    })).filter((category) => category.products.length > 0);
+  }, [categories, catalogQuery]);
 
   if (!isAdmin) {
     return (
-      <CenteredCard>
-        <ShieldAlert class="size-16 text-destructive" />
-        <h1 class="text-3xl font-bold">Accès administrateur requis</h1>
-        <p class="text-lg text-muted-foreground">
-          La carte de {member.firstName} {member.lastName} n'est pas autorisée.
-        </p>
-        <Button onClick={clear}>Scanner une autre carte</Button>
-      </CenteredCard>
+      <div class="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-3">
+        <div class="w-full max-w-lg">
+          <AdminAuthPanel allowPassword />
+        </div>
+      </div>
     );
   }
 
@@ -135,13 +141,25 @@ function ConfigContent() {
   };
 
   const selectAll = () => {
-    setSelectedIds(new Set((catalog ?? []).map((product) => product.id)));
+    if (catalogQuery.trim()) {
+      setSelectedIds((current) => new Set([
+        ...current,
+        ...filteredCategories.flatMap((category) => category.products.map((product) => product.id)),
+      ]));
+    } else {
+      setSelectedIds(new Set((catalog ?? []).map((product) => product.id)));
+    }
     setDirty(true);
     setSaveState("idle");
   };
 
   const clearSelection = () => {
-    setSelectedIds(new Set());
+    if (catalogQuery.trim()) {
+      const visibleIds = new Set(filteredCategories.flatMap((category) => category.products.map((product) => product.id)));
+      setSelectedIds((current) => new Set([...current].filter((id) => !visibleIds.has(id))));
+    } else {
+      setSelectedIds(new Set());
+    }
     setDirty(true);
     setSaveState("idle");
   };
@@ -169,36 +187,195 @@ function ConfigContent() {
     }
   };
 
+  const openPriceEditor = (product: CatalogSelectionProduct) => {
+    if (dirty) {
+      setPriceError("Enregistrez d’abord votre sélection de produits avant de modifier un prix.");
+      return;
+    }
+    setEditingPrice(product);
+    setPriceDraft(product.price);
+    setPriceError(null);
+    setPriceNotice(null);
+  };
+
+  const savePrice = async () => {
+    if (!editingPrice || priceSaving) return;
+    const normalized = priceDraft.trim().replace(",", ".");
+    if (!/^\d{1,8}(?:\.\d{1,2})?$/.test(normalized) || Number(normalized) <= 0) {
+      setPriceError("Saisissez un prix positif avec deux décimales au maximum.");
+      return;
+    }
+    const nextPrice = Number(normalized).toFixed(2);
+    if (nextPrice === Number(editingPrice.price).toFixed(2)) {
+      setEditingPrice(null);
+      return;
+    }
+    if (!window.confirm(`Changer le prix Fouaille de « ${editingPrice.name} » : ${editingPrice.price} € → ${nextPrice} € ? Ce prix s’appliquera aux prochains achats sur toutes les caisses.`)) return;
+    setPriceSaving(true);
+    setPriceError(null);
+    try {
+      const response = await fetch(apiUrl("admin/products/price"), {
+        method: "PUT",
+        headers: apiHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          adminCardNumber: member.cardNumber,
+          productId: editingPrice.id,
+          expectedPrice: editingPrice.price,
+          price: nextPrice,
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(body?.error || `Modification refusée (${response.status})`);
+      }
+      await refetch();
+      setEditingPrice(null);
+      setPriceNotice(`Prix de ${editingPrice.name} modifié : ${nextPrice} €.`);
+    } catch (error) {
+      setPriceError(error instanceof Error ? error.message : "Impossible de modifier le prix.");
+    } finally {
+      setPriceSaving(false);
+    }
+  };
+
+  const closeKiosk = async () => {
+    setClosingKiosk(true);
+    setKioskExitError(null);
+    try {
+      const response = await fetch(`${KIOSK_CONTROL_URL}/exit`, {
+        method: "POST",
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch {
+      setClosingKiosk(false);
+      setKioskExitError(
+        "Impossible de fermer automatiquement. Utilisez Alt+F4.",
+      );
+    }
+  };
+
   const adminNavigation = (
-    <nav class="flex shrink-0 items-center gap-3 overflow-x-auto border-b bg-card px-7 py-3">
-      <Button
-        variant={section === "catalog" ? "default" : "outline"}
-        onClick={() => setSection("catalog")}
-      >
-        <ShoppingBasket class="size-5" /> Catalogue
-      </Button>
-      <Button
-        variant={section === "statistics" ? "default" : "outline"}
-        onClick={() => setSection("statistics")}
-      >
-        <BarChart3 class="size-5" /> Statistiques
-      </Button>
-      <Button
-        variant={section === "accounting" ? "default" : "outline"}
-        onClick={() => setSection("accounting")}
-      >
-        <Calculator class="size-5" /> Compta
-      </Button>
-      <Button
-        variant={section === "corrections" ? "default" : "outline"}
-        onClick={() => setSection("corrections")}
-      >
-        <PencilLine class="size-5" /> Corrections
-      </Button>
-      <span class="ml-auto shrink-0 text-sm text-muted-foreground">
-        {member.firstName} {member.lastName}
-      </span>
-    </nav>
+    <>
+      <nav class="flex shrink-0 items-center gap-2 overflow-x-auto border-b bg-card px-3 py-3 sm:gap-3 sm:px-5 lg:px-7">
+        <Button
+          variant={section === "catalog" ? "default" : "outline"}
+          onClick={() => setSection("catalog")}
+        >
+          <ShoppingBasket class="size-5" /> Catalogue
+        </Button>
+        <Button variant={section === "fouaille-products" ? "default" : "outline"} onClick={() => setSection("fouaille-products")}>
+          <Package class="size-5" /> Produits Fouaille
+        </Button>
+        <Button
+          variant={section === "statistics" ? "default" : "outline"}
+          onClick={() => setSection("statistics")}
+        >
+          <BarChart3 class="size-5" /> Statistiques
+        </Button>
+        <Button
+          variant={section === "accounting" ? "default" : "outline"}
+          onClick={() => setSection("accounting")}
+        >
+          <Calculator class="size-5" /> Compta
+        </Button>
+        <Button variant={section === "members" ? "default" : "outline"} onClick={() => setSection("members")}>
+          <UsersRound class="size-5" /> Membres
+        </Button>
+        <span class="ml-auto" />
+        {ENV_EDITABLE && (
+          <Button
+            class="shrink-0"
+            variant="ghost"
+            size="sm"
+            title="Installation et configuration"
+            onClick={() => setSection("setup")}
+          >
+            <Server class="size-5" /> Installation
+          </Button>
+        )}
+        <Button
+          class="shrink-0"
+          variant="outline"
+          size="icon"
+          title="Recharger l’application"
+          aria-label="Recharger l’application"
+          onClick={() => window.location.reload()}
+        >
+          <RefreshCw class="size-5" />
+        </Button>
+        {kioskControlAvailable && (
+          <Button
+            class="shrink-0"
+            variant="destructive"
+            size="icon"
+            title="Fermer Marco"
+            aria-label="Fermer Marco"
+            onClick={() => {
+              setKioskExitError(null);
+              setShowExitDialog(true);
+            }}
+          >
+            <Power class="size-5" />
+          </Button>
+        )}
+      </nav>
+
+      {showExitDialog && (
+        <div class="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4">
+          <Card
+            class="w-full max-w-lg p-6 shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="close-marco-title"
+          >
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="close-marco-title" class="text-2xl font-bold">
+                  Fermer l’écran Marco ?
+                </h2>
+                <p class="mt-2 text-muted-foreground">
+                  Le navigateur sera fermé et le Bureau réapparaîtra. Le serveur
+                  Marco continuera de fonctionner.
+                </p>
+              </div>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Annuler"
+                disabled={closingKiosk}
+                onClick={() => setShowExitDialog(false)}
+              >
+                <X />
+              </Button>
+            </div>
+            {kioskExitError && (
+              <p class="mt-4 text-destructive">{kioskExitError}</p>
+            )}
+            <div class="mt-6 flex justify-end gap-3">
+              <Button
+                variant="outline"
+                disabled={closingKiosk}
+                onClick={() => setShowExitDialog(false)}
+              >
+                Rester sur Marco
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={closingKiosk}
+                onClick={() => void closeKiosk()}
+              >
+                {closingKiosk ? (
+                  <Loader2 class="animate-spin" />
+                ) : (
+                  <Power />
+                )}
+                Fermer et revenir au Bureau
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+    </>
   );
 
   if (section === "statistics") {
@@ -210,6 +387,20 @@ function ConfigContent() {
     );
   }
 
+  if (section === "members") {
+    return <div class="flex flex-1 min-h-0 flex-col overflow-hidden">
+      {adminNavigation}
+      <MembersPanel adminCardNumber={member.cardNumber} />
+    </div>;
+  }
+
+  if (section === "fouaille-products") {
+    return <div class="flex flex-1 min-h-0 flex-col overflow-hidden">
+      {adminNavigation}
+      <FouailleProductsPanel adminCardNumber={member.cardNumber} onChanged={() => void refetch()} />
+    </div>;
+  }
+
   if (section === "accounting") {
     return (
       <div class="flex flex-1 min-h-0 flex-col overflow-hidden">
@@ -219,11 +410,11 @@ function ConfigContent() {
     );
   }
 
-  if (section === "corrections") {
+  if (section === "setup") {
     return (
       <div class="flex flex-1 min-h-0 flex-col overflow-hidden">
         {adminNavigation}
-        <OrderCorrectionsPanel adminCardNumber={member.cardNumber} />
+        <SetupPanel member={member} />
       </div>
     );
   }
@@ -231,7 +422,7 @@ function ConfigContent() {
   return (
     <div class="flex flex-1 min-h-0 flex-col overflow-hidden">
       {adminNavigation}
-      <header class="flex items-center justify-between gap-5 border-b bg-card px-7 py-4">
+      <header class="flex flex-wrap items-center justify-between gap-3 border-b bg-card px-4 py-4 sm:gap-5 sm:px-7">
         <div>
           <h1 class="text-2xl font-bold">Produits vendus ce soir</h1>
           <p class="text-sm text-muted-foreground">
@@ -242,10 +433,10 @@ function ConfigContent() {
         </div>
         <div class="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={selectAll}>
-            Tout cocher
+            {catalogQuery.trim() ? "Cocher les résultats" : "Tout cocher"}
           </Button>
           <Button variant="ghost" size="sm" onClick={clearSelection}>
-            Tout décocher
+            {catalogQuery.trim() ? "Décocher les résultats" : "Tout décocher"}
           </Button>
           <Button
             onClick={saveSelection}
@@ -261,7 +452,12 @@ function ConfigContent() {
         </div>
       </header>
 
-      <div class="flex-1 overflow-y-auto px-7 py-5">
+      <div class="flex-1 overflow-y-auto px-4 py-5 sm:px-7">
+        <div class="mb-5 flex items-center gap-3 rounded border bg-background px-3">
+          <Search class="size-5 text-muted-foreground" />
+          <input class="min-h-12 min-w-0 flex-1 bg-transparent text-lg outline-none" value={catalogQuery}
+            placeholder="Chercher un produit à vendre ce soir" onInput={(event) => setCatalogQuery(event.currentTarget.value)} />
+        </div>
         {catalogLoading && (
           <div class="flex h-full items-center justify-center">
             <Loader2 class="size-12 animate-spin text-primary" />
@@ -285,36 +481,40 @@ function ConfigContent() {
           </CenteredCard>
         )}
 
+        {!catalogLoading && !catalogError && catalogQuery.trim() && filteredCategories.length === 0 && (
+          <p class="py-8 text-center text-muted-foreground">Aucun produit ne correspond à cette recherche.</p>
+        )}
+
         <div class="flex flex-col gap-7">
-          {categories.map((category) => (
+          {filteredCategories.map((category) => (
             <section key={category.id}>
               <h2 class="mb-3 text-lg font-semibold">{category.name}</h2>
               <div class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                 {category.products.map((product) => {
                   const selected = selectedIds.has(product.id);
                   return (
-                    <button
+                    <div
                       key={product.id}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => toggleProduct(product.id)}
                       class={cn(
-                        "relative min-h-28 border bg-card p-4 text-left transition-all hover:bg-accent",
+                        "relative min-h-28 border bg-card text-left transition-all hover:bg-accent",
                         selected &&
                           "border-primary bg-primary/10 ring-2 ring-primary/40",
                       )}
                     >
-                      {selected && (
-                        <span class="absolute right-3 top-3 rounded-full bg-primary p-1 text-primary-foreground">
-                          <Check class="size-4" />
-                        </span>
-                      )}
-                      <p class="pr-8 text-lg font-semibold">{product.name}</p>
-                      <p class="mt-1 text-sm text-muted-foreground">
-                        {product.title}
-                      </p>
-                      <p class="mt-3 font-medium">{product.price} €</p>
-                    </button>
+                      <button type="button" aria-pressed={selected} onClick={() => toggleProduct(product.id)} class="block w-full p-4 pb-1 text-left">
+                        {selected && (
+                          <span class="absolute right-3 top-3 rounded-full bg-primary p-1 text-primary-foreground">
+                            <Check class="size-4" />
+                          </span>
+                        )}
+                        <p class="pr-8 text-lg font-semibold">{product.name}</p>
+                        <p class="mt-1 text-sm text-muted-foreground">{product.title}</p>
+                        <p class="mt-3 font-medium">{product.price} €</p>
+                      </button>
+                      <button type="button" class="mx-4 mb-3 min-h-10 text-sm font-medium text-primary underline underline-offset-4" onClick={() => openPriceEditor(product)}>
+                        Modifier le prix
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -324,13 +524,38 @@ function ConfigContent() {
       </div>
 
       {saveState === "saved" && (
-        <div class="border-t border-green-500/30 bg-green-500/10 px-7 py-2 text-center text-green-400">
+        <div class="border-t border-green-500/30 bg-green-500/10 px-4 py-2 text-center text-green-400 sm:px-7">
           Sélection enregistrée. L'écran Achats est déjà à jour.
         </div>
       )}
       {saveState === "error" && (
-        <div class="border-t border-destructive/30 bg-destructive/10 px-7 py-2 text-center text-destructive">
+        <div class="border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-center text-destructive sm:px-7">
           Impossible d'enregistrer la sélection. Réessayez.
+        </div>
+      )}
+      {priceError && !editingPrice && <p role="alert" class="border-t border-destructive/30 px-7 py-2 text-center text-destructive">{priceError}</p>}
+      {priceNotice && <p role="status" class="border-t border-green-500/30 px-7 py-2 text-center text-green-400">{priceNotice}</p>}
+      {editingPrice && (
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3" role="presentation">
+          <div role="dialog" aria-modal="true" aria-labelledby="price-dialog-title" class="w-full max-w-md space-y-4 rounded-lg border bg-card p-6 shadow-2xl">
+            <h2 id="price-dialog-title" class="text-2xl font-bold">Prix de {editingPrice.name}</h2>
+            <p class="text-muted-foreground">Prix actuel dans Fouaille : {editingPrice.price} €</p>
+            <label class="block space-y-2">Nouveau prix (€)
+              <input inputMode="decimal" class="min-h-14 w-full rounded border bg-background px-3 text-2xl" value={priceDraft} onInput={(event) => setPriceDraft(event.currentTarget.value)} />
+            </label>
+            <div class="grid grid-cols-3 gap-2">
+              {["1", "2", "3", "4", "5", "6", "7", "8", "9", ",", "0", "⌫"].map((key) => (
+                <Button key={key} type="button" variant="outline" class="min-h-12 text-xl" onClick={() => setPriceDraft((current) => key === "⌫" ? current.slice(0, -1) : current + key)}>{key}</Button>
+              ))}
+            </div>
+            <Button type="button" variant="outline" class="w-full" onClick={() => setPriceDraft("")}>Effacer le montant saisi</Button>
+            {priceError && <p role="alert" class="text-destructive">{priceError}</p>}
+            <p class="text-sm text-muted-foreground">Le nouveau tarif sera utilisé pour les prochains paiements sur toutes les Marco. Les ventes passées ne changent pas.</p>
+            <div class="flex gap-3">
+              <Button variant="outline" class="flex-1" disabled={priceSaving} onClick={() => { setEditingPrice(null); setPriceError(null); }}>Annuler</Button>
+              <Button class="flex-1" disabled={priceSaving} onClick={() => void savePrice()}>{priceSaving ? "Enregistrement…" : "Enregistrer le prix"}</Button>
+            </div>
+          </div>
         </div>
       )}
     </div>

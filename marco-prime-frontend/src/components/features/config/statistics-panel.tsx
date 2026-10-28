@@ -195,7 +195,7 @@ export function StatisticsPanel({ adminCardNumber }: StatisticsPanelProps) {
 
   return (
     <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div class="flex flex-wrap items-center gap-3 border-b bg-card px-7 py-3">
+      <div class="flex flex-wrap items-center gap-3 border-b bg-card px-4 py-3 sm:px-7">
         <Button
           variant={view === "results" ? "default" : "outline"}
           onClick={() => setView("results")}
@@ -263,9 +263,9 @@ function ResultsView(props: ResultsViewProps) {
   const { statistics } = props;
 
   return (
-    <div class="min-h-0 flex-1 overflow-y-auto px-7 py-5">
+    <div class="min-h-0 flex-1 overflow-auto px-4 py-5 sm:px-7">
       <div class="mb-5 flex flex-wrap items-end gap-4 rounded-xl border bg-card p-4">
-        <label class="flex min-w-64 flex-col gap-1 text-sm font-medium">
+        <label class="flex min-w-0 flex-col gap-1 text-sm font-medium sm:min-w-64">
           <span>Période</span>
           <select
             class="h-12 rounded-lg border bg-background px-4 text-lg font-semibold outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
@@ -274,13 +274,13 @@ function ResultsView(props: ResultsViewProps) {
               props.setPeriod(event.currentTarget.value as Period)
             }
           >
-            <option value="evening">Soirée · 17h–23h59</option>
-            <option value="today">Aujourd’hui · minuit–minuit</option>
+            <option value="evening">Soirée · 16h30–23h59</option>
+            <option value="today">Aujourd’hui · 00h00–23h59</option>
             <option value="week">Semaine · lundi–dimanche</option>
             <option value="custom">Dates personnalisées</option>
           </select>
         </label>
-        <label class="flex min-w-56 flex-col gap-1 text-sm font-medium">
+        <label class="flex min-w-0 flex-col gap-1 text-sm font-medium sm:min-w-56">
           <span>Actualisation</span>
           <select
             class="h-12 rounded-lg border bg-background px-4 text-lg outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
@@ -394,7 +394,7 @@ interface CostsViewProps {
 function CostsView(props: CostsViewProps) {
   return (
     <div class="flex min-h-0 flex-1 flex-col">
-      <div class="flex items-center justify-between gap-4 border-b px-7 py-4">
+      <div class="flex items-center justify-between gap-4 border-b px-4 py-4 sm:px-7">
         <div>
           <h2 class="text-xl font-bold">Prix d’achat unitaires</h2>
           <p class="text-sm text-muted-foreground">Enregistrés uniquement sur cette Marco, jamais dans Fouaille Manager.</p>
@@ -405,10 +405,10 @@ function CostsView(props: CostsViewProps) {
         </Button>
       </div>
 
-      {props.error && <div class="border-b border-destructive/30 bg-destructive/10 px-7 py-3 text-center text-destructive">{props.error}</div>}
-      {props.saveState === "saved" && <div class="border-b border-green-500/30 bg-green-500/10 px-7 py-3 text-center text-green-500">Prix d’achat enregistrés. Les bénéfices ont été recalculés.</div>}
+      {props.error && <div class="border-b border-destructive/30 bg-destructive/10 px-4 py-3 text-center text-destructive sm:px-7">{props.error}</div>}
+      {props.saveState === "saved" && <div class="border-b border-green-500/30 bg-green-500/10 px-4 py-3 text-center text-green-500 sm:px-7">Prix d’achat enregistrés. Les bénéfices ont été recalculés.</div>}
 
-      <div class="min-h-0 flex-1 overflow-y-auto px-7 py-5">
+      <div class="min-h-0 flex-1 overflow-auto px-4 py-5 sm:px-7">
         {props.loading ? (
           <div class="flex h-full items-center justify-center"><Loader2 class="size-12 animate-spin text-primary" /></div>
         ) : (
@@ -467,10 +467,10 @@ function getRange(period: Period, customFrom: string, customTo: string) {
   const end = new Date(start);
 
   if (period === "evening") {
-    start.setHours(17, 0, 0, 0);
-    end.setDate(end.getDate() + 1);
+    start.setHours(16, 30, 0, 0);
+    end.setHours(23, 59, 59, 999);
   } else if (period === "today") {
-    end.setDate(end.getDate() + 1);
+    end.setHours(23, 59, 59, 999);
   } else if (period === "week") {
     start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
     end.setTime(start.getTime());

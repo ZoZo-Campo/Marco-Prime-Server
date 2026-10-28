@@ -2,13 +2,21 @@
   encode zstd gzip
 
   header {
-    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    Strict-Transport-Security "max-age=31536000"
     X-Content-Type-Options "nosniff"
     X-Frame-Options "DENY"
     Referrer-Policy "no-referrer"
+    Permissions-Policy "camera=(self), microphone=(), geolocation=()"
     -Server
   }
 
-  reverse_proxy backend:3000
-}
+  # MARCO_TLS_DIRECTIVE accepte trois formes (voir INSTALLATION_SERVEUR.md) :
+  #   tls internal                            -> autorité locale Caddy (réseau fermé)
+  #   tls votre-adresse@exemple.fr            -> Let's Encrypt (DNS public requis)
+  #   tls /certs/fullchain.pem /certs/privkey.pem -> certificat fourni par l'école
+  {$MARCO_TLS_DIRECTIVE:tls internal}
 
+  # L'API et le frontend sont servis par le même conteneur, donc par la même
+  # origine : pas de CORS, un seul nom de domaine, un seul certificat.
+  reverse_proxy app:3000
+}

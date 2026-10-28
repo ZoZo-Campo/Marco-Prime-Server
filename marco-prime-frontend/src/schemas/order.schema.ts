@@ -19,6 +19,9 @@ export const orderSchema = z.object({
     })
     .nullable(),
   price: moneyStringSchema,
+  effectivePrice: moneyStringSchema,
+  previousBalance: moneyStringSchema.nullable(),
+  newBalance: moneyStringSchema.nullable(),
   amount: z.coerce.number().int().positive(),
   date: z.string().datetime(),
   ledgerKind: z.enum([
@@ -27,8 +30,12 @@ export const orderSchema = z.object({
     "corrected-original",
     "correction-refund",
     "correction-replacement",
+    "recharge-corrected",
+    "recharge-correction",
   ]).optional(),
+  paymentMethod: z.enum(["card", "cash"]).nullable().optional(),
   correctionOriginalOrderId: z.number().int().positive().nullable().optional(),
+  correctionReason: z.string().nullable().optional(),
 });
 
 export const orderListResponseSchema = z.object({

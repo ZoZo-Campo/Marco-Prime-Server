@@ -1,20 +1,55 @@
+@font-face {
+  font-family: "InterVariable";
+  src: url("/fonts/InterVariable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme inline {
-  --color-background: oklch(0.141 0.005 285.823);
-  --color-foreground: oklch(0.985 0 0);
-  --color-card: oklch(0.21 0.006 285.885);
-  --color-card-foreground: oklch(0.985 0 0);
-  --color-popover: oklch(0.21 0.006 285.885);
-  --color-popover-foreground: oklch(0.985 0 0);
-  --color-primary: oklch(0.6231 0.188 259.81);
-  --color-primary-foreground: oklch(0.97 0.014 254.604);
-  --color-secondary: oklch(0.274 0.006 286.033);
-  --color-secondary-foreground: oklch(0.985 0 0);
-  --color-muted: oklch(0.274 0.006 286.033);
-  --color-muted-foreground: oklch(0.705 0.015 286.067);
-  --color-accent: oklch(0.274 0.006 286.033);
-  --color-accent-foreground: oklch(0.985 0 0);
-  --color-destructive: oklch(0.704 0.191 22.216);
-  --color-border: oklch(1 0 0 / 10%);
-  --color-input: oklch(1 0 0 / 15%);
-  --color-ring: oklch(0.556 0 0);
+  /* Polices : Inter auto-hébergée (fonctionne hors-ligne au comptoir) */
+  --font-sans: "InterVariable", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --default-font-family: var(--font-sans);
+
+  /* Surfaces : 4 plans de profondeur au lieu d'un gris plat */
+  --color-background: oklch(0.155 0.016 280);
+  --color-foreground: oklch(0.975 0.004 280);
+  --color-card: oklch(0.215 0.02 280);
+  --color-card-foreground: oklch(0.985 0.003 280);
+  --color-popover: oklch(0.245 0.022 280);
+  --color-popover-foreground: oklch(0.985 0.003 280);
+
+  /* Accent de marque : bleu électrique (lisible en intérieur/comptoir) */
+  --color-primary: oklch(0.68 0.185 258);
+  --color-primary-foreground: oklch(0.985 0.008 258);
+  --color-secondary: oklch(0.27 0.018 280);
+  --color-secondary-foreground: oklch(0.985 0.003 280);
+  --color-muted: oklch(0.265 0.017 280);
+  --color-muted-foreground: oklch(0.795 0.014 280);
+  --color-accent: oklch(0.31 0.022 280);
+  --color-accent-foreground: oklch(0.985 0.003 280);
+
+  --color-destructive: oklch(0.685 0.19 22);
+  --color-success: oklch(0.735 0.175 150);
+  --color-warning: oklch(0.815 0.15 85);
+
+  --color-border: oklch(1 0 0 / 9%);
+  --color-input: oklch(1 0 0 / 14%);
+  --color-ring: oklch(0.68 0.185 258 / 55%);
+  --color-glow: oklch(0.68 0.185 258 / 22%);
+
+  /* Rayons plus généreux : l'« app moderne » vs « page web carrée » */
+  --radius-sm: 0.6rem;
+  --radius-md: 0.9rem;
+  --radius-lg: 1.1rem;
+  --radius-xl: 1.5rem;
+  --radius-2xl: 1.9rem;
+  --radius-3xl: 2.4rem;
+
+  /* Ombres douces, teintées (pas du gris) */
+  --shadow-xs: 0 1px 2px oklch(0 0 0 / 0.35);
+  --shadow-sm: 0 2px 4px oklch(0 0 0 / 0.35);
+  --shadow-md: 0 8px 20px -6px oklch(0 0 0 / 0.5);
+  --shadow-lg: 0 16px 40px -10px oklch(0 0 0 / 0.6);
+  --shadow-xl: 0 28px 60px -14px oklch(0 0 0 / 0.65);
 }

@@ -121,6 +121,10 @@ function RechargeTicketContent({ ticket }: { ticket: Extract<typeof ticketSignal
           <span class="text-muted-foreground">Rechargement</span>
           <span class="text-green-600">+{ticket.transaction.amount} EUR</span>
         </div>
+        <div class="flex justify-between text-sm">
+          <span class="text-muted-foreground">Paiement reçu</span>
+          <span>{ticket.transaction.paymentMethod === "card" ? "Carte bancaire" : "Espèces"}</span>
+        </div>
       </div>
 
       <div class="px-6 flex justify-between font-bold text-lg">
@@ -138,6 +142,9 @@ function RechargeTicketContent({ ticket }: { ticket: Extract<typeof ticketSignal
             </span>
           </div>
         </div>
+      )}
+      {!ticket.transaction.paymentMethodRecorded && (
+        <p class="px-6 text-sm text-amber-500">Rechargement effectué, mais le mode de paiement n’a pas été enregistré pour l’export. Ne relancez pas le paiement.</p>
       )}
     </>
   );

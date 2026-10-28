@@ -1,14 +1,35 @@
-import { count, desc, eq, inArray } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  like,
+  lt,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 import { db } from "../config/database.js";
 import { members, orders, products } from "../db/schema.js";
 
 export class OrderRepository {
-  async countAll() {
-    const [{ total }] = await db.select({ total: count() }).from(orders);
+  async countAll(filters: OrderHistoryFilters = {}) {
+    const [{ total }] = await db
+      .select({ total: count() })
+      .from(orders)
+      .leftJoin(products, eq(orders.productId, products.id))
+      .leftJoin(members, eq(orders.memberId, members.id))
+      .where(historyCondition(filters));
     return total;
   }
 
-  async findMany(limit: number, offset: number) {
+  async findMany(
+    limit: number,
+    offset: number,
+    filters: OrderHistoryFilters = {},
+  ) {
     return await db
       .select({
         id: orders.id,
@@ -29,8 +50,25 @@ export class OrderRepository {
       .from(orders)
       .leftJoin(products, eq(orders.productId, products.id))
       .leftJoin(members, eq(orders.memberId, members.id))
+      .where(historyCondition(filters))
       .limit(limit)
       .offset(offset)
+      .orderBy(desc(orders.date), desc(orders.id));
+  }
+
+  async findLedgerByMemberIds(memberIds: number[]) {
+    if (memberIds.length === 0) return [];
+    return await db
+      .select({
+        id: orders.id,
+        memberId: orders.memberId,
+        productId: orders.productId,
+        price: orders.price,
+        amount: orders.amount,
+        date: orders.date,
+      })
+      .from(orders)
+      .where(inArray(orders.memberId, memberIds))
       .orderBy(desc(orders.date), desc(orders.id));
   }
 
@@ -134,6 +172,9 @@ export class OrderRepository {
         throw new Error("INVALID_MEMBER_BALANCE");
       }
       const newBalanceCents = currentBalanceCents - totalCents;
+      if (newBalanceCents < 0) {
+        throw new Error("INSUFFICIENT_BALANCE");
+      }
       const ledgerTotalCents = receiptItems.reduce(
         (total, item) => total - item.lineTotalCents,
         0,
@@ -264,6 +305,102 @@ export class OrderRepository {
     });
   }
 
+  async findRechargeById(orderId: number) {
+    const [recharge] = await db
+      .select({
+        id: orders.id,
+        productId: orders.productId,
+        memberId: orders.memberId,
+        price: orders.price,
+        amount: orders.amount,
+        date: orders.date,
+        memberFirstName: members.firstName,
+        memberLastName: members.lastName,
+        memberCardNumber: members.cardNumber,
+      })
+      .from(orders)
+      .leftJoin(members, eq(orders.memberId, members.id))
+      .where(eq(orders.id, orderId))
+      .limit(1);
+    return recharge ?? null;
+  }
+
+  async cancelRechargeTransaction(originalOrderId: number) {
+    return await db.transaction(async (tx) => {
+      const [original] = await tx
+        .select({
+          id: orders.id,
+          productId: orders.productId,
+          memberId: orders.memberId,
+          price: orders.price,
+          amount: orders.amount,
+        })
+        .from(orders)
+        .where(eq(orders.id, originalOrderId))
+        .limit(1)
+        .for("update");
+
+      if (!original) throw new Error("RECHARGE_CORRECTION_NOT_FOUND");
+      if (
+        original.productId !== null ||
+        original.amount !== 1 ||
+        original.memberId === null
+      ) {
+        throw new Error("RECHARGE_CORRECTION_NOT_A_RECHARGE");
+      }
+      const amountCents = toCents(original.price);
+      if (amountCents === null || amountCents <= 0) {
+        throw new Error("RECHARGE_CORRECTION_INVALID_AMOUNT");
+      }
+
+      const [lockedMember] = await tx
+        .select({ balance: members.balance })
+        .from(members)
+        .where(eq(members.id, original.memberId))
+        .limit(1)
+        .for("update");
+      if (!lockedMember) {
+        throw new Error("RECHARGE_CORRECTION_MEMBER_NOT_FOUND");
+      }
+
+      const currentBalanceCents = toCents(lockedMember.balance);
+      if (currentBalanceCents === null) {
+        throw new Error("RECHARGE_CORRECTION_INVALID_BALANCE");
+      }
+      const newBalanceCents = currentBalanceCents - amountCents;
+      if (newBalanceCents < 0) {
+        throw new Error("RECHARGE_CORRECTION_INSUFFICIENT_BALANCE");
+      }
+      if (Math.abs(newBalanceCents) > MAX_DATABASE_MONEY_CENTS) {
+        throw new Error("RECHARGE_CORRECTION_INVALID_BALANCE");
+      }
+
+      const [cancellation] = await tx
+        .insert(orders)
+        .values({
+          productId: null,
+          memberId: original.memberId,
+          price: fromCents(-amountCents),
+          amount: 1,
+        })
+        .$returningId();
+
+      await tx
+        .update(members)
+        .set({ balance: fromCents(newBalanceCents) })
+        .where(eq(members.id, original.memberId));
+
+      return {
+        originalOrderId,
+        cancellationOrderId: cancellation.id,
+        memberId: original.memberId,
+        amount: fromCents(amountCents),
+        previousBalance: lockedMember.balance,
+        newBalance: fromCents(newBalanceCents),
+      };
+    });
+  }
+
   async correctPurchaseTransaction(
     originalOrderId: number,
     replacementProductId: number | null,
@@ -314,7 +451,12 @@ export class OrderRepository {
           .where(eq(products.id, replacementProductId))
           .limit(1)
           .for("update");
-        if (!replacement?.available) throw new Error("CORRECTION_PRODUCT_UNAVAILABLE");
+        if (
+          !replacement ||
+          (!replacement.available && replacement.id !== original.productId)
+        ) {
+          throw new Error("CORRECTION_PRODUCT_UNAVAILABLE");
+        }
 
         let unitPriceCents: number | null;
         if (replacement.id === original.productId && (-originalLedgerCents) % original.amount === 0) {
@@ -333,6 +475,11 @@ export class OrderRepository {
       if (balanceCents === null) throw new Error("CORRECTION_INVALID_BALANCE");
       const balanceChangeCents = refundCents - replacementTotalCents;
       const newBalanceCents = balanceCents + balanceChangeCents;
+      // A correction must never worsen a negative balance. A refund is still
+      // allowed for an already-negative member because it repairs the balance.
+      if (newBalanceCents < 0 && newBalanceCents < balanceCents) {
+        throw new Error("CORRECTION_INSUFFICIENT_BALANCE");
+      }
       if (!Number.isSafeInteger(newBalanceCents) || Math.abs(newBalanceCents) > MAX_DATABASE_MONEY_CENTS) {
         throw new Error("CORRECTION_INVALID_BALANCE");
       }
@@ -373,6 +520,38 @@ export class OrderRepository {
       };
     });
   }
+}
+
+export interface OrderHistoryFilters {
+  search?: string;
+  from?: Date;
+  to?: Date;
+}
+
+function historyCondition(filters: OrderHistoryFilters) {
+  const conditions: SQL[] = [];
+  if (filters.from) conditions.push(gte(orders.date, filters.from));
+  if (filters.to) conditions.push(lt(orders.date, filters.to));
+
+  const search = filters.search?.trim();
+  if (search) {
+    const pattern = `%${search}%`;
+    const orderId = /^\d+$/.test(search) ? Number(search) : null;
+    conditions.push(
+      or(
+        like(members.firstName, pattern),
+        like(members.lastName, pattern),
+        like(products.name, pattern),
+        sql`concat(${members.firstName}, ' ', ${members.lastName}) like ${pattern}`,
+        sql`concat(${members.lastName}, ' ', ${members.firstName}) like ${pattern}`,
+        ...(orderId !== null && Number.isSafeInteger(orderId)
+          ? [eq(orders.id, orderId)]
+          : []),
+      )!,
+    );
+  }
+
+  return conditions.length > 0 ? and(...conditions) : undefined;
 }
 
 const MAX_DATABASE_MONEY_CENTS = 9_999_999_999;

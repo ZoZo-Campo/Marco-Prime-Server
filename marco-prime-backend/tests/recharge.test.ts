@@ -23,6 +23,7 @@ describe("Recharge Endpoint", async () => {
           cardNumber: nonAdminCardNumber,
           adminCardNumber,
           amount: 10.5,
+          paymentMethod: "card",
         },
       },
       authenticatedOptions,
@@ -57,6 +58,7 @@ describe("Recharge Endpoint", async () => {
           transactionId: crypto.randomUUID(),
           cardNumber: adminCardNumber,
           amount: 10.5,
+          paymentMethod: "card",
         },
       },
       authenticatedOptions,
@@ -76,6 +78,7 @@ describe("Recharge Endpoint", async () => {
         cardNumber: nonAdminCardNumber,
         adminCardNumber,
         amount: 4.25,
+        paymentMethod: "card",
       },
     };
 
@@ -100,6 +103,7 @@ describe("Recharge Endpoint", async () => {
         cardNumber: nonAdminCardNumber,
         adminCardNumber,
         amount: 3.75,
+        paymentMethod: "card",
       },
     };
 
@@ -128,6 +132,7 @@ describe("Recharge Endpoint", async () => {
           cardNumber: nonAdminCardNumber,
           adminCardNumber,
           amount: 1,
+          paymentMethod: "card",
         },
       },
       authenticatedOptions,
@@ -139,6 +144,7 @@ describe("Recharge Endpoint", async () => {
           cardNumber: nonAdminCardNumber,
           adminCardNumber,
           amount: 2,
+          paymentMethod: "card",
         },
       },
       authenticatedOptions,
@@ -156,6 +162,7 @@ describe("Recharge Endpoint", async () => {
           cardNumber: 999999,
           adminCardNumber,
           amount: 10,
+          paymentMethod: "card",
         },
       },
       authenticatedOptions,
@@ -174,6 +181,7 @@ describe("Recharge Endpoint", async () => {
           cardNumber: nonAdminCardNumber,
           adminCardNumber: 999999,
           amount: 10,
+          paymentMethod: "card",
         },
       },
       authenticatedOptions,
@@ -192,6 +200,7 @@ describe("Recharge Endpoint", async () => {
           cardNumber: nonAdminCardNumber,
           adminCardNumber: nonAdminCardNumber,
           amount: 10,
+          paymentMethod: "card",
         },
       },
       authenticatedOptions,
@@ -209,6 +218,7 @@ describe("Recharge Endpoint", async () => {
           transactionId: crypto.randomUUID(),
           cardNumber: nonAdminCardNumber,
           amount: 10,
+          paymentMethod: "card",
         },
       },
       authenticatedOptions,
@@ -226,6 +236,7 @@ describe("Recharge Endpoint", async () => {
         cardNumber: nonAdminCardNumber,
         adminCardNumber,
         amount: 10,
+        paymentMethod: "card",
       },
     });
     expect(res.status).toBe(401);

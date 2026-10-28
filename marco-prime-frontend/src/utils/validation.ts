@@ -8,5 +8,11 @@ export function hasInsufficientBalance(
   total: number,
   balance: string | number,
 ): boolean {
-  return total > Number(balance);
+  const totalCents = Math.round(total * 100);
+  const balanceCents = Math.round(Number(balance) * 100);
+  return (
+    !Number.isSafeInteger(totalCents) ||
+    !Number.isSafeInteger(balanceCents) ||
+    totalCents > balanceCents
+  );
 }

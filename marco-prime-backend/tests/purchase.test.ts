@@ -1,9 +1,9 @@
 import { testClient } from "hono/testing";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { app } from "../src/index.js";
 import { db } from "../src/config/database.js";
-import { products } from "../src/db/schema.js";
+import { members, orders, products } from "../src/db/schema.js";
 import {
   authenticatedOptions,
   getAvailableProductId,
@@ -94,6 +94,91 @@ describe("Purchase Endpoint", async () => {
       expect(toCents(ledgerOrder.price)).toBe(
         -toCents(receiptItem.totalPrice),
       );
+    }
+  });
+
+  it("should allow a purchase that leaves the balance at exactly zero", async () => {
+    const [product] = await db
+      .select({ price: products.price })
+      .from(products)
+      .where(eq(products.id, availableProductId))
+      .limit(1);
+    if (!product) throw new Error("Product not found for test");
+
+    const originalBalance = await getBalanceByCardNumber(cardNumber);
+    let orderIds: number[] = [];
+    try {
+      await db
+        .update(members)
+        .set({ balance: product.price })
+        .where(eq(members.cardNumber, cardNumber));
+
+      const response = await client.api.v1.purchase.$post(
+        {
+          json: {
+            transactionId: crypto.randomUUID(),
+            cardNumber,
+            items: [{ productId: availableProductId, amount: 1 }],
+          },
+        },
+        authenticatedOptions,
+      );
+
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      orderIds = body.transaction.orderIds;
+      expect(body.transaction.newBalance).toBe("0.00");
+      expect(await getBalanceByCardNumber(cardNumber)).toBe("0.00");
+    } finally {
+      if (orderIds.length > 0) {
+        await db.delete(orders).where(inArray(orders.id, orderIds));
+      }
+      await db
+        .update(members)
+        .set({ balance: originalBalance })
+        .where(eq(members.cardNumber, cardNumber));
+    }
+  });
+
+  it("should reject a purchase that would make the balance negative", async () => {
+    const [product] = await db
+      .select({ price: products.price })
+      .from(products)
+      .where(eq(products.id, availableProductId))
+      .limit(1);
+    if (!product) throw new Error("Product not found for test");
+
+    const originalBalance = await getBalanceByCardNumber(cardNumber);
+    const insufficientBalance = ((toCents(product.price) - 1) / 100).toFixed(2);
+    const orderCountBefore = await getOrderCount();
+    try {
+      await db
+        .update(members)
+        .set({ balance: insufficientBalance })
+        .where(eq(members.cardNumber, cardNumber));
+
+      const response = await client.api.v1.purchase.$post(
+        {
+          json: {
+            transactionId: crypto.randomUUID(),
+            cardNumber,
+            items: [{ productId: availableProductId, amount: 1 }],
+          },
+        },
+        authenticatedOptions,
+      );
+
+      expect(response.status).toBe(402);
+      expect(await response.json()).toMatchObject({
+        error: "Solde insuffisant : le paiement a été refusé",
+      });
+      expect(await getBalanceByCardNumber(cardNumber)).toBe(insufficientBalance);
+      expect(await getOrderCount()).toBe(orderCountBefore);
+    } finally {
+      await db
+        .update(members)
+        .set({ balance: originalBalance })
+        .where(eq(members.cardNumber, cardNumber));
     }
   });
 

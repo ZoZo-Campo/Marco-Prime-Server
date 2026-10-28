@@ -10,7 +10,7 @@ services:
     cap_add: [CHOWN]
     security_opt: [no-new-privileges:true]
 
-  backend:
+  app:
     build:
       context: .
       dockerfile: Dockerfile.server
@@ -25,7 +25,8 @@ services:
     restart: unless-stopped
     read_only: true
     init: true
-    tmpfs: [/tmp:rw,noexec,nosuid,size=64m]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     healthcheck:
@@ -39,8 +40,9 @@ services:
     image: caddy:2.10-alpine
     environment:
       MARCO_API_DOMAIN: ${MARCO_API_DOMAIN:?MARCO_API_DOMAIN is required}
+      MARCO_TLS_DIRECTIVE: ${MARCO_TLS_DIRECTIVE:-tls internal}
     depends_on:
-      backend:
+      app:
         condition: service_healthy
     ports:
       - "80:80"

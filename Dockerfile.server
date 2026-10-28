@@ -1,4 +1,8 @@
-FROM node:24-bookworm-slim AS build
+# Image unique : API + frontend statique.
+# Le frontend est construit sans secret : l'URL de l'API et le jeton sont
+# injectés à l'exécution par /runtime-config.js (voir src/index.ts).
+
+FROM node:24-bookworm-slim AS backend-build
 RUN npm install --global pnpm@11.25.0
 WORKDIR /build
 COPY marco-prime-backend/package.json marco-prime-backend/pnpm-lock.yaml marco-prime-backend/pnpm-workspace.yaml ./
@@ -6,15 +10,30 @@ RUN pnpm install --frozen-lockfile
 COPY marco-prime-backend/ ./
 RUN pnpm build
 
+FROM node:24-bookworm-slim AS frontend-build
+RUN npm install --global pnpm@11.25.0
+WORKDIR /build
+COPY marco-prime-frontend/package.json marco-prime-frontend/pnpm-lock.yaml marco-prime-frontend/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY marco-prime-frontend/ ./
+RUN pnpm build
+
 FROM node:24-bookworm-slim AS runtime
 RUN npm install --global pnpm@11.25.0
 WORKDIR /app
 COPY marco-prime-backend/package.json marco-prime-backend/pnpm-lock.yaml marco-prime-backend/pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile --prod --no-optional
-COPY --from=build /build/dist ./dist
+RUN pnpm install --frozen-lockfile --prod --no-optional \
+  && npm cache clean --force \
+  && rm -rf /root/.local/share/pnpm/store
+COPY --from=backend-build /build/dist ./dist
+COPY --from=frontend-build /build/dist ./public
 RUN mkdir -p /app/data && chown -R node:node /app/data
-ENV NODE_ENV=production API_PORT=3000 TZ=Europe/Paris
+ENV NODE_ENV=production \
+    API_PORT=3000 \
+    API_HOST=0.0.0.0 \
+    MARCO_DEPLOYMENT=server \
+    MARCO_DATA_DIR=/app/data \
+    TZ=Europe/Paris
 EXPOSE 3000
 USER node
 CMD ["node", "dist/index.js"]
-

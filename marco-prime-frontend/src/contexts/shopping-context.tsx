@@ -83,6 +83,27 @@ function updateAmount(productId: number, amount: number) {
   );
 }
 
+/** Met à jour les informations variables sans modifier les quantités. */
+function refreshProductDetails(products: Array<Omit<ProductInCart, "amount">>) {
+  const byId = new Map(products.map((product) => [product.id, product]));
+  let changed = false;
+  const next = selectedProductsSignal.value.map((current) => {
+    const fresh = byId.get(current.id);
+    if (!fresh) return current;
+    if (
+      current.name === fresh.name &&
+      current.title === fresh.title &&
+      current.price === fresh.price &&
+      current.color === fresh.color
+    ) {
+      return current;
+    }
+    changed = true;
+    return { ...fresh, amount: current.amount };
+  });
+  if (changed) selectedProductsSignal.value = next;
+}
+
 /**
  * Vide le panier
  */
@@ -100,5 +121,6 @@ export const shopping = {
   increment,
   decrement,
   updateAmount,
+  refreshProductDetails,
   reset,
 };
