@@ -12,20 +12,21 @@
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:security": "tsx src/db/migrate.ts",
     "db:studio": "drizzle-kit studio",
     "db:seed": "tsx src/db/seed.ts",
     "catalog:sync": "tsx -e \"import('./src/services/fouaille-sync.service.ts').then(({ synchronizeFouailleCatalog }) => synchronizeFouailleCatalog()).then(console.log)\""
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.17",
+    "@hono/node-server": "^2.1.5",
     "@hono/swagger-ui": "^0.5.3",
     "@hono/zod-validator": "^0.7.6",
     "dotenv": "^17.2.3",
-    "drizzle-orm": "^0.45.2",
-    "hono": "^4.13.7",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.14",
     "hono-rate-limiter": "^0.5.3",
-    "mysql2": "^3.24.3",
-    "zod": "^4.3.5"
+    "mysql2": "^3.24.6",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",

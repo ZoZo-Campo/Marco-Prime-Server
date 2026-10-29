@@ -141,6 +141,32 @@ describe("Order correction endpoints", () => {
       expect(toCents(await getBalanceByCardNumber(memberCardNumber))).toBe(
         toCents(originalBalance) - expectedCharge,
       );
+
+      // Même si le journal local disparaît, la table de correction reste la
+      // garde : un second remboursement doit être refusé.
+      await rm(path.join(dataDirectory, "order-corrections.json"), {
+        force: true,
+      });
+      orderCorrectionService.resetForTests();
+      const retryWithoutJournal = await client.api.v1[
+        "order-corrections"
+      ].apply.$post(
+        {
+          json: {
+            adminCardNumber,
+            originalOrderId,
+            replacementProductId,
+            replacementAmount: 3,
+            reason: "Tentative après perte du journal",
+          },
+        },
+        authenticatedOptions,
+      );
+      expect(retryWithoutJournal.status).toBe(409);
+      expect(await getOrderCount()).toBe(countAfterCorrection);
+      expect(toCents(await getBalanceByCardNumber(memberCardNumber))).toBe(
+        toCents(originalBalance) - expectedCharge,
+      );
     } finally {
       if (createdIds.length > 0) {
         await db.delete(orders).where(inArray(orders.id, createdIds));

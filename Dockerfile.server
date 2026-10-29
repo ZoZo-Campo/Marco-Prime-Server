@@ -1,6 +1,6 @@
 # Image unique : API + frontend statique.
-# Le frontend est construit sans secret : l'URL de l'API et le jeton sont
-# injectés à l'exécution par /runtime-config.js (voir src/index.ts).
+# Le frontend est construit sans secret : l'URL de l'API est lue à l'exécution
+# dans /runtime-config.js, et le jeton est injecté par Caddy vers l'API.
 
 FROM node:24-bookworm-slim AS backend-build
 RUN npm install --global pnpm@11.25.0
@@ -18,15 +18,21 @@ RUN pnpm install --frozen-lockfile
 COPY marco-prime-frontend/ ./
 RUN pnpm build
 
-FROM node:24-bookworm-slim AS runtime
+# Dépendances de production uniquement. pnpm reste dans cet étage de build :
+# l'image finale ne contient que Node et les modules nécessaires.
+FROM node:24-bookworm-slim AS prod-deps
 RUN npm install --global pnpm@11.25.0
-WORKDIR /app
+WORKDIR /build
 COPY marco-prime-backend/package.json marco-prime-backend/pnpm-lock.yaml marco-prime-backend/pnpm-workspace.yaml ./
-RUN pnpm install --frozen-lockfile --prod --no-optional \
-  && npm cache clean --force \
-  && rm -rf /root/.local/share/pnpm/store
-COPY --from=backend-build /build/dist ./dist
-COPY --from=frontend-build /build/dist ./public
+RUN pnpm install --frozen-lockfile --prod --no-optional
+
+FROM node:24-bookworm-slim AS runtime
+WORKDIR /app
+COPY --from=prod-deps --chown=node:node /build/node_modules ./node_modules
+COPY --from=backend-build --chown=node:node /build/dist ./dist
+COPY --from=backend-build --chown=node:node /build/drizzle ./drizzle
+COPY --from=frontend-build --chown=node:node /build/dist ./public
+COPY --chown=node:node marco-prime-backend/package.json ./package.json
 RUN mkdir -p /app/data && chown -R node:node /app/data
 ENV NODE_ENV=production \
     API_PORT=3000 \

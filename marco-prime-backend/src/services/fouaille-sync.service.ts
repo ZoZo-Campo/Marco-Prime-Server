@@ -35,8 +35,14 @@ export function parseFouailleCatalog(payload: unknown) {
 }
 
 export async function synchronizeFouailleCatalog(): Promise<FouailleSyncResult> {
-  const endpoint =
-    process.env.FOUAILLE_API_URL || "https://fouaille.bde-tps.fr/api/product";
+  // Aucune adresse par défaut : l'URL Fouaille dépend du déploiement et ne
+  // doit pas être codée en dur dans un dépôt public.
+  const endpoint = process.env.FOUAILLE_API_URL;
+  if (!endpoint) {
+    throw new Error(
+      "FOUAILLE_API_URL doit être défini pour synchroniser le catalogue Fouaille",
+    );
+  }
   const response = await fetch(endpoint, {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(10_000),

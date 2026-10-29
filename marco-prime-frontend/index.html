@@ -11,18 +11,11 @@
     />
     <meta name="description" content="Marco Prime — caisse et rechargement du BDE" />
     <title>Marco Prime</title>
-    <!-- Configuration d'exécution (URL de l'API + jeton), servie par le backend. -->
+    <!-- Configuration d'exécution (URL de l'API + mode), servie par le backend. -->
     <script src="/runtime-config.js"></script>
   </head>
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      if ("serviceWorker" in navigator) {
-        window.addEventListener("load", function () {
-          navigator.serviceWorker.register("/sw.js").catch(function () {});
-        });
-      }
-    </script>
   </body>
 </html>

@@ -28,7 +28,11 @@ export function auditEvent(
     | "product.created"
     | "product.availability.changed"
     | "product.price.changed"
-    | "system.env.imported",
+    | "system.env.imported"
+    | "admin.access_denied"
+    | "admin.bootstrap_legacy_access"
+    | "admin.session_opened"
+    | "admin.setup_token_rejected",
   details: Record<string, unknown>,
 ) {
   if (process.env.NODE_ENV === "test") return;

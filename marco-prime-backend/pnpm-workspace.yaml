@@ -1,4 +1,3 @@
 allowBuilds:
-  "@prisma/engines": false
   esbuild: true
-  prisma: false
+autoInstallPeers: false

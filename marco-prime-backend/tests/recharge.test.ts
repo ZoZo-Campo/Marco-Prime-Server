@@ -1,6 +1,9 @@
+import { rm } from "node:fs/promises";
+import path from "node:path";
 import { testClient } from "hono/testing";
 import { describe, expect, it } from "vitest";
 import { app } from "../src/index.js";
+import { rechargeCorrectionService } from "../src/services/recharge-correction.service.js";
 import {
   authenticatedOptions,
   getBalanceByCardNumber,
@@ -240,6 +243,62 @@ describe("Recharge Endpoint", async () => {
       },
     });
     expect(res.status).toBe(401);
+  });
+
+  it("should not cancel a recharge twice when the local journal is lost", async () => {
+    rechargeCorrectionService.resetForTests();
+    const recharge = await client.api.v1.recharge.$post(
+      {
+        json: {
+          transactionId: crypto.randomUUID(),
+          cardNumber: nonAdminCardNumber,
+          adminCardNumber,
+          amount: 2.5,
+          paymentMethod: "card",
+        },
+      },
+      authenticatedOptions,
+    );
+    expect(recharge.status).toBe(201);
+    const rechargeBody = await recharge.json();
+    const originalOrderId = rechargeBody.transaction.orderId as number;
+    const balanceAfterRecharge = await getBalanceByCardNumber(nonAdminCardNumber);
+
+    const cancel = await client.api.v1["recharge-corrections"].apply.$post(
+      {
+        json: {
+          adminCardNumber,
+          originalOrderId,
+          reason: "Annulation automatique de test",
+        },
+      },
+      authenticatedOptions,
+    );
+    expect(cancel.status).toBe(201);
+    const balanceAfterCancel = await getBalanceByCardNumber(nonAdminCardNumber);
+    expect(balanceAfterCancel).not.toBe(balanceAfterRecharge);
+
+    const dataDirectory = process.env.MARCO_DATA_DIR;
+    if (!dataDirectory) throw new Error("MARCO_DATA_DIR missing in tests");
+    await rm(path.join(dataDirectory, "recharge-corrections.json"), {
+      force: true,
+    });
+    rechargeCorrectionService.resetForTests();
+
+    const retry = await client.api.v1["recharge-corrections"].apply.$post(
+      {
+        json: {
+          adminCardNumber,
+          originalOrderId,
+          reason: "Tentative après perte du journal",
+        },
+      },
+      authenticatedOptions,
+    );
+    expect(retry.status).toBe(409);
+    expect(await getBalanceByCardNumber(nonAdminCardNumber)).toBe(
+      balanceAfterCancel,
+    );
   });
 });
 

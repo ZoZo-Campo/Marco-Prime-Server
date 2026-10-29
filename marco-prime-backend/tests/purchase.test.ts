@@ -3,7 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { app } from "../src/index.js";
 import { db } from "../src/config/database.js";
-import { members, orders, products } from "../src/db/schema.js";
+import { idempotencyKeys, members, orders, products } from "../src/db/schema.js";
 import {
   authenticatedOptions,
   getAvailableProductId,
@@ -234,14 +234,25 @@ describe("Purchase Endpoint", async () => {
     };
 
     const first = await client.api.v1.purchase.$post(request, authenticatedOptions);
+    const firstBody = await first.clone().json();
     const balanceAfterFirst = await getBalanceByCardNumber(cardNumber);
     const retry = await client.api.v1.purchase.$post(request, authenticatedOptions);
     const balanceAfterRetry = await getBalanceByCardNumber(cardNumber);
 
     expect(first.status).toBe(201);
     expect(retry.status).toBe(200);
-    expect(await retry.json()).toEqual(await first.json());
+    expect(await retry.json()).toEqual(firstBody);
     expect(balanceAfterRetry).toBe(balanceAfterFirst);
+
+    // La réponse doit survivre au redémarrage du processus : elle est dans la
+    // base, pas seulement dans une Map mémoire.
+    const [stored] = await db
+      .select()
+      .from(idempotencyKeys)
+      .where(eq(idempotencyKeys.transactionId, transactionId))
+      .limit(1);
+    expect(stored?.scope).toBe("purchase");
+    expect(JSON.parse(stored!.responseJson)).toEqual(firstBody);
   });
 
   it("should coalesce two simultaneous requests with the same transaction identifier", async () => {

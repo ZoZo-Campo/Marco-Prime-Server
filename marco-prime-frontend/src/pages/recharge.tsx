@@ -14,7 +14,11 @@ import { MemberSearch } from "../components/features/member/member-search";
 import { QrScanButton } from "../components/features/member/qr-scan-button";
 import { BirthdayBadge } from "../components/features/member/birthday-badge";
 import { CardCodeEntry } from "../components/features/buy/card-code-entry";
+import { AdminPasswordDialog } from "../components/features/auth/admin-password-dialog";
+import { adminSessionRequired, hasValidAdminSession } from "../utils/admin-access";
+import { clearAdminSession } from "../utils/admin-session";
 import {
+  adminPasswordCardSignal,
   pendingRechargeSignal,
   rechargeAmountSignal,
   rechargePaymentMethodSignal,
@@ -61,10 +65,41 @@ function RechargeContent() {
 
   useEffect(() => {
     if (waitingForAdminSignal.value && adminCardNumber && member) {
-      processRecharge(Number(adminCardNumber));
+      beginRecharge(Number(adminCardNumber));
       clearAdminRfid();
     }
   }, [adminCardNumber, waitingForAdminSignal.value]);
+
+  /**
+   * Vérifie la session avant d'envoyer l'opération. En mode serveur avec mot
+   * de passe, la carte administratrice doit être couverte par une session
+   * signée ; sinon on demande le mot de passe sans perdre le panier en cours.
+   */
+  const beginRecharge = (adminCard?: number) => {
+    if (rechargeInProgressSignal.value) return;
+    const pending = pendingRechargeSignal.value;
+    const authorizingCard =
+      adminCard ??
+      pending?.adminCardNumber ??
+      (member?.admin ? member.cardNumber : undefined);
+
+    if (
+      adminSessionRequired() &&
+      (authorizingCard === undefined ||
+        !hasValidAdminSession(authorizingCard))
+    ) {
+      if (authorizingCard === undefined) {
+        rechargeErrorSignal.value =
+          "Carte administrateur requise pour ouvrir la session.";
+        return;
+      }
+      pause();
+      adminPasswordCardSignal.value = authorizingCard;
+      return;
+    }
+
+    void processRecharge(adminCard);
+  };
 
   const processRecharge = async (adminCard?: number) => {
     if (rechargeInProgressSignal.value) return;
@@ -72,20 +107,26 @@ function RechargeContent() {
     let rechargeRequest = pendingRechargeSignal.value;
     if (!rechargeRequest) {
       if (!member || !rechargeAmountSignal.value) return;
-      const adminCardNumber =
+      const authorizingCard =
         adminCard ?? (member.admin ? member.cardNumber : undefined);
-      if (!member.admin && !adminCardNumber) return;
+      if (!member.admin && !authorizingCard) return;
 
       rechargeRequest = {
         transactionId: crypto.randomUUID(),
         cardNumber: member.cardNumber,
         amount: Number(rechargeAmountSignal.value),
         paymentMethod: rechargePaymentMethodSignal.value,
-        ...(adminCardNumber ? { adminCardNumber } : {}),
+        // Pour un membre non-admin, la carte admin est transmise comme avant.
+        // Pour un admin qui se recharge lui-même, le serveur utilise sa
+        // propre carte et la réponse ne contient pas `processedBy`.
+        ...(!member.admin && authorizingCard
+          ? { adminCardNumber: authorizingCard }
+          : {}),
       } satisfies PendingRecharge;
       pendingRechargeSignal.value = rechargeRequest;
     }
 
+    adminPasswordCardSignal.value = null;
     waitingForAdminSignal.value = false;
     resume();
     rechargeInProgressSignal.value = true;
@@ -106,8 +147,15 @@ function RechargeContent() {
         const message =
           payload && typeof payload.error === "string"
             ? payload.error
-            : `Rechargement refusé (erreur ${response.status})`;
-        if (response.status >= 400 && response.status < 500) {
+            : payload && typeof payload.message === "string"
+              ? payload.message
+              : `Rechargement refusé (erreur ${response.status})`;
+        if (response.status === 401) {
+          // Session absente ou expirée : on garde la transaction en attente
+          // pour la rejouer avec le même identifiant après déverrouillage.
+          clearAdminSession();
+          rechargeErrorSignal.value = message;
+        } else if (response.status >= 400 && response.status < 500) {
           pendingRechargeSignal.value = null;
           rechargeErrorSignal.value = message;
         } else {
@@ -131,6 +179,7 @@ function RechargeContent() {
 
       rechargeAmountSignal.value = "";
       pendingRechargeSignal.value = null;
+      adminPasswordCardSignal.value = null;
       waitingForAdminSignal.value = false;
       resume();
       route(TICKET_ROUTE_URL);
@@ -140,6 +189,7 @@ function RechargeContent() {
       rechargeErrorSignal.value = error instanceof Error
         ? `${error.message}. Résultat incertain : utilisez Réessayer.`
         : "Connexion perdue. Résultat incertain : utilisez Réessayer.";
+      adminPasswordCardSignal.value = null;
       waitingForAdminSignal.value = false;
       resume();
     } finally {
@@ -149,14 +199,14 @@ function RechargeContent() {
 
   const handleRecharge = () => {
     if (pendingRechargeSignal.value) {
-      void processRecharge();
+      beginRecharge();
       return;
     }
     if (!member || !rechargeAmountSignal.value) return;
 
     if (member.admin) {
-      // Member is admin, no need for separate admin card
-      processRecharge();
+      // Le membre est administrateur : sa propre carte autorise l'opération.
+      beginRecharge(member.cardNumber);
     } else {
       pause();
       waitingForAdminSignal.value = true;
@@ -164,6 +214,7 @@ function RechargeContent() {
   };
 
   const handleCancel = () => {
+    adminPasswordCardSignal.value = null;
     waitingForAdminSignal.value = false;
     resume();
   };
@@ -304,7 +355,7 @@ function RechargeContent() {
       </aside>
 
       {/* Admin card modal */}
-      {waitingForAdminSignal.value && (
+      {waitingForAdminSignal.value && adminPasswordCardSignal.value === null && (
         <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <Card class="w-96 gap-4 py-6">
             <div class="px-6 text-center">
@@ -325,7 +376,7 @@ function RechargeContent() {
               <QrScanButton
                 label="Scanner le QR admin"
                 onSubmit={(adminCode) => {
-                  processRecharge(Number(adminCode));
+                  beginRecharge(Number(adminCode));
                   return false;
                 }}
               />
@@ -335,7 +386,7 @@ function RechargeContent() {
               <CardCodeEntry
                 title="Code admin"
                 onSubmit={(adminCode) => {
-                  processRecharge(Number(adminCode));
+                  beginRecharge(Number(adminCode));
                   return false;
                 }}
               />
@@ -347,6 +398,20 @@ function RechargeContent() {
             </div>
           </Card>
         </div>
+      )}
+
+      {/* Mot de passe de configuration pour la carte admin déjà scannée */}
+      {adminPasswordCardSignal.value !== null && (
+        <AdminPasswordDialog
+          cardNumber={adminPasswordCardSignal.value}
+          title="Confirmer le rechargement"
+          description={`Rechargement de ${amount.toFixed(2)} € pour ${member?.firstName ?? "ce membre"} ${member?.lastName ?? ""}. Saisissez le mot de passe de configuration pour autoriser l’opération.`}
+          onCancel={handleCancel}
+          onUnlocked={() => {
+            const card = adminPasswordCardSignal.value;
+            if (card !== null) void processRecharge(card);
+          }}
+        />
       )}
     </div>
   );

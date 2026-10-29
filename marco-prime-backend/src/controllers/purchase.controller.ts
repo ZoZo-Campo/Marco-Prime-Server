@@ -2,8 +2,16 @@ import type { Context } from "hono";
 import type { z } from "zod";
 import { HTTPException } from "hono/http-exception";
 import { MemberRepository } from "../repositories/member.repository.js";
-import { OrderRepository } from "../repositories/order.repository.js";
+import {
+  OrderRepository,
+  type PurchaseTransactionResult,
+} from "../repositories/order.repository.js";
 import { catalogSelectionService } from "../services/catalog-selection.service.js";
+import {
+  findIdempotentResponse,
+  hashRequest,
+  IdempotencyConflictError,
+} from "../services/idempotency.service.js";
 import { auditEvent } from "../config/logger.js";
 import {
   purchaseReceiptSchema,
@@ -13,70 +21,129 @@ import {
 type PurchaseRequest = z.infer<typeof purchaseRequestSchema>;
 type PurchaseReceiptDTO = z.infer<typeof purchaseReceiptSchema>;
 
-type CachedPurchase = {
+type InFlightPurchase = {
   requestKey: string;
-  receipt: PurchaseReceiptDTO;
+  promise: Promise<PurchaseReceiptDTO>;
 };
 
-const completedPurchases = new Map<string, CachedPurchase>();
-const purchasesInProgress = new Map<
-  string,
-  { requestKey: string; promise: Promise<PurchaseReceiptDTO> }
->();
-const MAX_COMPLETED_PURCHASES = 1_000;
+// Uniquement pour fusionner deux requêtes simultanées dans le même processus.
+// La source de vérité est la table `idempotency_keys`, pas cette Map.
+const purchasesInProgress = new Map<string, InFlightPurchase>();
 
 export class PurchaseController {
   private memberRepository = new MemberRepository();
   private orderRepository = new OrderRepository();
 
   async createPurchase(c: Context) {
-    const request = c.req.valid(
-      "json" as never,
-    ) as PurchaseRequest;
-    const requestKey = JSON.stringify({
+    const request = c.req.valid("json" as never) as PurchaseRequest;
+    const requestKey = hashRequest("purchase", {
       cardNumber: request.cardNumber,
       items: request.items,
     });
-    const completed = completedPurchases.get(request.transactionId);
-    if (completed) {
-      if (completed.requestKey !== requestKey) {
+
+    const inFlight = purchasesInProgress.get(request.transactionId);
+    if (inFlight) {
+      if (inFlight.requestKey !== requestKey) {
         throw new HTTPException(409, {
           message: "Cet identifiant de transaction appartient à un autre panier",
         });
       }
-      return c.json(completed.receipt, 200);
+      return c.json(
+        await this.resolveReceipt(
+          inFlight.promise,
+          request.transactionId,
+          requestKey,
+        ),
+        201,
+      );
     }
 
-    let inProgress = purchasesInProgress.get(request.transactionId);
-    if (inProgress && inProgress.requestKey !== requestKey) {
-      throw new HTTPException(409, {
-        message: "Cet identifiant de transaction appartient à un autre panier",
-      });
-    }
-    if (!inProgress) {
-      inProgress = {
-        requestKey,
-        promise: this.processPurchase(request),
-      };
-      purchasesInProgress.set(request.transactionId, inProgress);
+    const cached = await this.readCached(
+      request.transactionId,
+      requestKey,
+    );
+    if (cached) return c.json(cached, 200);
+
+    // Nouvelle vérification après l'attente réseau/DB : deux requêtes
+    // parties en même temps ne doivent pas créer deux transactions.
+    const racing = purchasesInProgress.get(request.transactionId);
+    if (racing) {
+      if (racing.requestKey !== requestKey) {
+        throw new HTTPException(409, {
+          message: "Cet identifiant de transaction appartient à un autre panier",
+        });
+      }
+      return c.json(
+        await this.resolveReceipt(
+          racing.promise,
+          request.transactionId,
+          requestKey,
+        ),
+        201,
+      );
     }
 
+    const promise = this.processPurchase(request, requestKey);
+    purchasesInProgress.set(request.transactionId, { requestKey, promise });
     try {
-      const receipt = await inProgress.promise;
-      completedPurchases.set(request.transactionId, { requestKey, receipt });
-      trimCompletedPurchases();
+      const receipt = await this.resolveReceipt(
+        promise,
+        request.transactionId,
+        requestKey,
+      );
       return c.json(receipt, 201);
     } finally {
       purchasesInProgress.delete(request.transactionId);
     }
   }
 
-  private async processPurchase({
-    transactionId,
-    cardNumber,
-    items,
-  }: PurchaseRequest): Promise<PurchaseReceiptDTO> {
+  /**
+   * Si une autre instance de l'API a gagné la course, l'insertion de la clé
+   * échoue. On relit alors la réponse validée en base et on la rejoue.
+   */
+  private async resolveReceipt(
+    promise: Promise<PurchaseReceiptDTO>,
+    transactionId: string,
+    requestKey: string,
+  ): Promise<PurchaseReceiptDTO> {
+    try {
+      return await promise;
+    } catch (error) {
+      try {
+        const cached = await this.readCached(transactionId, requestKey);
+        if (cached) return cached;
+      } catch (lookupError) {
+        // Un identifiant réutilisé avec un autre panier est un conflit
+        // explicite ; une panne de lecture ne doit pas masquer l'erreur
+        // d'origine (solde insuffisant, produit indisponible…).
+        if (lookupError instanceof HTTPException) throw lookupError;
+      }
+      throw error;
+    }
+  }
 
+  private async readCached(transactionId: string, requestKey: string) {
+    try {
+      const cached = await findIdempotentResponse(
+        transactionId,
+        "purchase",
+        requestKey,
+      );
+      return cached ? (cached as PurchaseReceiptDTO) : null;
+    } catch (error) {
+      if (error instanceof IdempotencyConflictError) {
+        throw new HTTPException(409, {
+          message: "Cet identifiant de transaction appartient à un autre panier",
+        });
+      }
+      throw error;
+    }
+  }
+
+  private async processPurchase(
+    { transactionId, cardNumber, items }: PurchaseRequest,
+    requestKey: string,
+  ): Promise<PurchaseReceiptDTO> {
     const member = await this.memberRepository.findFullByCardNumber(cardNumber);
     if (!member) {
       throw new HTTPException(404, {
@@ -92,6 +159,29 @@ export class PurchaseController {
         member.id,
         items,
         selectedProductIds,
+        {
+          transactionId,
+          requestHash: requestKey,
+          buildResponse: (result: PurchaseTransactionResult) =>
+            ({
+              success: true,
+              transaction: {
+                transactionId,
+                orderIds: result.orderIds,
+                date: result.orderDate,
+                items: result.items,
+                member: {
+                  id: member.id,
+                  firstName: member.firstName,
+                  lastName: member.lastName,
+                  cardNumber: member.cardNumber!,
+                },
+                totalPrice: result.totalPrice,
+                previousBalance: result.previousBalance,
+                newBalance: result.newBalance,
+              },
+            }) satisfies PurchaseReceiptDTO,
+        },
       );
     } catch (error) {
       if (error instanceof Error) {
@@ -123,42 +213,18 @@ export class PurchaseController {
       throw error;
     }
 
-    const receipt = {
-      success: true,
-      transaction: {
-        transactionId,
-        orderIds: purchase.orderIds,
-        date: purchase.orderDate,
-        items: purchase.items,
-        member: {
-          id: member.id,
-          firstName: member.firstName,
-          lastName: member.lastName,
-          cardNumber: member.cardNumber!,
-        },
-        totalPrice: purchase.totalPrice,
-        previousBalance: purchase.previousBalance,
-        newBalance: purchase.newBalance,
-      },
-    } satisfies PurchaseReceiptDTO;
+    const { result, response } = purchase;
+    const receipt = response as PurchaseReceiptDTO;
 
     auditEvent("purchase.completed", {
       transactionId,
       memberId: member.id,
-      orderIds: purchase.orderIds,
-      previousBalance: purchase.previousBalance,
-      amount: `-${purchase.totalPrice}`,
-      newBalance: purchase.newBalance,
+      orderIds: result.orderIds,
+      previousBalance: result.previousBalance,
+      amount: `-${result.totalPrice}`,
+      newBalance: result.newBalance,
     });
 
     return receipt;
-  }
-}
-
-function trimCompletedPurchases() {
-  while (completedPurchases.size > MAX_COMPLETED_PURCHASES) {
-    const oldestTransactionId = completedPurchases.keys().next().value;
-    if (!oldestTransactionId) return;
-    completedPurchases.delete(oldestTransactionId);
   }
 }

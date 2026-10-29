@@ -61,7 +61,7 @@ Trois acteurs, trois rôles :
   │  Caddy  ──►  Application │   API + interface + données locales
   │  (HTTPS)     (Node.js)   │
   └──────────────┬───────────┘
-                 │  MySQL (port 3307)
+                 │  MySQL (port 3306, ou celui fourni)
                  ▼
         Base Fouaille « BdeData »
 ```
@@ -84,12 +84,17 @@ Trois acteurs, trois rôles :
 3. Caddy transmet la requête à l'application, sur le réseau interne Docker. Ce
    conteneur n'est jamais joignable directement depuis l'extérieur.
 4. L'application renvoie l'interface (HTML, CSS, JavaScript). Le navigateur
-   charge ensuite `/runtime-config.js`, qui contient l'adresse de l'API et le
-   jeton d'accès.
-5. Chaque action (scanner une carte, valider un achat) appelle `/api/v1/...`
-   avec ce jeton. L'application interroge MySQL Fouaille, met à jour le solde et
-   enregistre la vente.
-6. Les données propres à la soirée (compta, sélection du catalogue) sont
+   charge ensuite `/runtime-config.js`, qui ne contient que l'adresse de l'API
+   et le mode de déploiement — **aucun secret**.
+5. Chaque action (scanner une carte, valider un achat) appelle `/api/v1/...`.
+   Caddy ajoute lui-même le jeton d'API à la requête avant de la transmettre :
+   le navigateur ne le reçoit jamais. L'application interroge MySQL Fouaille,
+   met à jour le solde et enregistre la vente.
+6. Une action sensible (configuration, statistiques, correction, rechargement
+   validé par un administrateur) exige en plus une **session administrateur
+   signée**, ouverte avec le mot de passe de configuration et valable
+   30 minutes.
+7. Les données propres à la soirée (compta, sélection du catalogue) sont
    écrites dans un volume Docker, sauvegardable.
 
 Tout passe par **un seul nom de domaine** et **une seule origine** : il n'y a
@@ -143,6 +148,13 @@ nano .env.server          # domaine, DATABASE_URL, API_TOKEN…
 La première construction prend 2 à 5 minutes. Ensuite, ouvrez l'adresse depuis
 un appareil du réseau de l'école.
 
+> **Base Fouaille déjà existante (`BdeData`).** Avant la première utilisation,
+> appliquez une fois les tables et index de sécurité :
+> `./server migrate`. La commande ne supprime aucune donnée, mais elle crée des
+> tables et des index : faites une sauvegarde et testez-la d'abord sur une copie
+> de la base. Si le compte MySQL n'a pas les droits `CREATE`/`ALTER`/`INDEX`,
+> demandez au service informatique d'exécuter la migration.
+
 > La procédure détaillée, les trois modes de certificat et le dépannage sont
 > dans **[INSTALLATION_SERVEUR.md](INSTALLATION_SERVEUR.md)**.
 > Les notions de DNS, ports et certificats sont expliquées simplement dans
@@ -161,13 +173,16 @@ un appareil du réseau de l'école.
 | `./server logs` | Affiche les journaux en direct |
 | `./server check` | Vérifie la syntaxe de la configuration |
 | `./server url` | Affiche l'adresse HTTPS |
+| `./server migrate` | Ajoute les tables et index de sécurité à une base existante, sans supprimer de données |
 | `./server backup` | Archive le volume de données dans `backups/` |
+| `./server restore <archive>` | Remplace le volume de données par une sauvegarde, après confirmation |
 | `./server cert` | Exporte l'autorité locale Caddy dans `certs/` (mode `tls internal`) |
 
 Mise à jour :
 
 ```bash
 git pull
+./server migrate     # uniquement si la version ajoute une migration
 ./server rebuild
 ```
 
@@ -188,7 +203,18 @@ qui est propre à cette Marco :
 | `order-corrections.json` | Journal des corrections de ventes |
 | `recharge-corrections.json` | Journal des annulations de rechargements |
 | `recharge-methods.json` | Méthode de paiement par défaut |
-| `config-auth.json` | Mot de passe local de la configuration (haché) |
+| `config-auth.json` | Mot de passe de configuration (haché), lié à une carte admin |
+
+Deux tables sont également ajoutées à la base Fouaille par `./server migrate` :
+
+| Table | Rôle |
+|-------|------|
+| `idempotency_keys` | Empêche qu'un achat ou un rechargement soit débité deux fois après une coupure réseau ; conservée 30 jours |
+| `order_corrections` | Empêche qu'une même vente ou un même rechargement soit corrigé deux fois, même si le volume local est perdu |
+
+Ces tables ne contiennent aucune donnée métier nouvelle : elles protègent les
+écritures existantes. La migration ne supprime ni ne modifie les membres, les
+produits, les soldes ou les ventes.
 
 Ces fichiers sont précieux : ils portent la compta et la protection contre une
 double correction. Sauvegardez-les :
@@ -212,21 +238,37 @@ La restauration et l'automatisation par cron sont décrites dans
   n'est jamais publiée directement sur le réseau.
 - **HTTPS partout.** Il protège les numéros de carte et il est obligatoire pour
   installer la PWA.
-- **Un jeton d'API.** Il est exigé sur `/api/v1/*`. Il empêche les appels
-  accidentels ou venant d'un autre site. Il ne remplace pas un contrôle d'accès :
-  quelqu'un qui peut ouvrir la page peut lire le jeton. **La vraie barrière est
-  l'accès au réseau de l'école.**
-- **Une configuration protégée.** L'écran de configuration demande une carte
-  administrateur **et** un mot de passe local. En mode serveur, le fichier
-  `.env` ne peut pas être modifié depuis l'interface (réponse `409`).
+- **Le jeton d'API ne va plus dans le navigateur.** Caddy l'ajoute lui-même à
+  chaque requête vers l'application. Il sert à authentifier le proxy, pas à
+  identifier une personne : il ne faut pas le considérer comme un mot de passe.
+- **Une session administrateur signée.** Le mot de passe de configuration ouvre
+  une session de 30 minutes, liée à la carte de l'administrateur. Elle est
+  exigée sur les actions sensibles : configuration, statistiques, comptabilité,
+  corrections, création/modification de membres ou de produits, changement de
+  méthode de rechargement. Un numéro de carte seul ne suffit plus.
+- **Premier mot de passe protégé.** En mode serveur, définir le tout premier
+  mot de passe exige le jeton d'installation (`X-Setup-Token`, égal à
+  `API_TOKEN`). Une carte admin trouvée au hasard ne peut donc pas prendre le
+  contrôle avant le vrai administrateur.
+- **Limites techniques.** Corps de requête limité à 1 Mo, 300 requêtes par
+  minute et par IP, 30 requêtes par minute sur les routes de mot de passe.
+  Verrouillage temporaire après plusieurs échecs.
 - **Des conteneurs verrouillés.** Lecture seule, capacités Linux retirées,
-  `no-new-privileges`, utilisateur non privilégié.
+  `no-new-privileges`, utilisateur non privilégié, limites CPU/RAM/PIDs et
+  rotation des journaux Docker.
 - **Aucun secret dans Git.** `.env.server`, `.env.frontend`, `backups/` et
   `certs/` sont ignorés. Ne les publiez jamais.
 
-La documentation publique de l'API (`/ui` et `/doc`) est accessible sans jeton :
-elle ne décrit que les routes, sans données. Elle peut être bloquée dans le
-`Caddyfile` si vous préférez la masquer.
+La documentation d'API (`/ui` et `/doc`) est bloquée par Caddy : elle répond
+`404` en production.
+
+> **La vraie barrière reste l'accès réseau.** Les routes de caisse (recherche
+> d'un membre, achat, rechargement, historique, catalogue) sont volontairement
+> accessibles à un appareil du réseau pour ne pas ralentir le passage en caisse.
+> Marco doit donc rester sur le réseau de l'école, **jamais exposé directement
+> à Internet** sans VPN ou authentification par utilisateur. Les routes de
+> recherche et d'historique peuvent révéler des noms et des soldes à quelqu'un
+> qui se trouve déjà sur ce réseau.
 
 ---
 
@@ -248,12 +290,14 @@ elle ne décrit que les routes, sans données. Elle peut être bloquée dans le
 Marco-Prime-Server/
 ├── marco-prime-backend/        API Node.js + Hono + Drizzle
 │   ├── src/                    routes, services, dépôts, schéma MySQL
+│   ├── drizzle/                migrations SQL
 │   ├── tests/                  tests Vitest + lanceur sécurisé
 │   ├── .env.example            modèle pour le mode local
 │   └── .env.test               base de test locale (jamais la production)
 ├── marco-prime-frontend/       Interface Preact + Vite + Tailwind
 │   ├── src/                    pages, composants, hooks
 │   └── public/                 PWA (manifest, service worker, icônes)
+├── .github/workflows/          CI (tests) et release
 ├── Dockerfile.server           image unique : API + interface
 ├── Dockerfile.frontend         interface statique pour un kiosque séparé
 ├── compose.server.yml          application + Caddy + préparation du volume
@@ -285,17 +329,19 @@ Tests de l'API, sur une base **locale** `marco_prime_test` (jamais la production
 mysql -h 127.0.0.1 -P 3306 -u root -p \
   -e "CREATE DATABASE IF NOT EXISTS marco_prime_test;"
 
-# 2. Créer le schéma puis lancer les tests
+# 2. Créer le schéma, les tables de sécurité, puis lancer les tests
 cd marco-prime-backend
 DATABASE_URL='mysql://UTILISATEUR:MOT_DE_PASSE@127.0.0.1:3306/marco_prime_test' \
   pnpm db:push
+DATABASE_URL='mysql://UTILISATEUR:MOT_DE_PASSE@127.0.0.1:3306/marco_prime_test' \
+  pnpm db:security
 pnpm test
 ```
 
 `pnpm test` lit `marco-prime-backend/.env.test` et réinitialise la base à chaque
-exécution. Adaptez ce fichier à votre MySQL local (l'exemple utilise
-`marco`/`marco123`), ou passez `DATABASE_URL` en variable d'environnement : elle
-est prioritaire.
+exécution. Adaptez ce fichier à votre MySQL local, ou passez `DATABASE_URL` en
+variable d'environnement : elle est prioritaire. `pnpm db:security` est
+idempotent : il peut être relancé sans risque et ne supprime aucune donnée.
 
 Le lanceur de tests **refuse** toute base non locale ou dont le nom ne contient
 pas `test`. Il est donc impossible de lancer les tests contre `BdeData` par
@@ -310,7 +356,9 @@ erreur.
 | « Site inaccessible » | Le nom résout-il ? `dig +short <domaine>` |
 | Avertissement de certificat | Normal en `tls internal` tant que l'autorité n'est pas installée (section 6 de `INSTALLATION_SERVEUR.md`) |
 | `502` / `503` | `./server status` puis `./server logs` |
-| `401` sur toute l'API | Le jeton du navigateur ne correspond pas à `API_TOKEN` |
+| `401` sur toute l'API | Le jeton injecté par Caddy ne correspond pas à celui de l'application : `./server check` puis `./server rebuild` |
+| « Session administrateur requise » | La session de 30 minutes a expiré : rouvrez-la avec le mot de passe de configuration |
+| « Jeton d'installation requis » | Définissez le premier mot de passe avec `X-Setup-Token` égal à `API_TOKEN` (section 8 de `INSTALLATION_SERVEUR.md`) |
 | « Configuration gérée sur le serveur » | C'est voulu : modifiez `.env.server` sur l'hôte puis `./server rebuild` |
 | « Base indisponible » | Vérifiez `/ready` puis les droits MySQL du compte |
 

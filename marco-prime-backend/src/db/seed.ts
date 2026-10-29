@@ -9,8 +9,11 @@ if (!databaseUrl) throw new Error("DATABASE_URL is not defined");
 
 const parsedDatabaseUrl = new URL(databaseUrl);
 const localHosts = new Set(["localhost", "127.0.0.1", "[::1]", "mysql"]);
-if (!localHosts.has(parsedDatabaseUrl.hostname)) {
-  throw new Error("Seed refused: only a local database can be reset");
+const databaseName = parsedDatabaseUrl.pathname.replace(/^\//, "").toLowerCase();
+if (!localHosts.has(parsedDatabaseUrl.hostname) || !databaseName.includes("test")) {
+  throw new Error(
+    "Seed refused: database must be local and its name must contain 'test'",
+  );
 }
 
 const connection = await mysql.createConnection(databaseUrl);
@@ -20,6 +23,8 @@ async function main() {
   console.log("Resetting database...");
 
   // Delete in order to respect foreign key constraints
+  await db.delete(schema.orderCorrections);
+  await db.delete(schema.idempotencyKeys);
   await db.delete(schema.orders);
   await db.delete(schema.products);
   await db.delete(schema.members);
@@ -28,7 +33,16 @@ async function main() {
   console.log("Database reset completed!");
   console.log("Starting database seed...");
 
-  await seed(db, schema, { seed: 1 }).refine((f) => ({
+  // Ne semer que les tables métier : les clés d'idempotence et les
+  // corrections doivent rester vides dans un jeu de démonstration.
+  const seedSchema = {
+    productTypes: schema.productTypes,
+    products: schema.products,
+    members: schema.members,
+    orders: schema.orders,
+  };
+
+  await seed(db, seedSchema, { seed: 1 }).refine((f) => ({
     productTypes: {
       count: 4,
       columns: {

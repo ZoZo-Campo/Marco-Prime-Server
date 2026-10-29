@@ -47,11 +47,20 @@ export const accountingExportSchema = z.object({
   from: z.string().datetime(),
   to: z.string().datetime(),
 }).superRefine(({ from, to }, context) => {
-  if (new Date(to) <= new Date(from)) {
+  const fromTime = new Date(from).getTime();
+  const toTime = new Date(to).getTime();
+  if (toTime <= fromTime) {
     context.addIssue({
       code: "custom",
       path: ["to"],
       message: "The end date must be after the start date",
+    });
+  }
+  if (toTime - fromTime > 366 * 24 * 60 * 60 * 1000) {
+    context.addIssue({
+      code: "custom",
+      path: ["to"],
+      message: "The export period cannot exceed 366 days",
     });
   }
 });

@@ -4,7 +4,9 @@ export const rechargeRequestSchema = z.object({
   transactionId: z.string().uuid(),
   cardNumber: z.number().int().positive().safe(),
   adminCardNumber: z.number().int().positive().safe().optional(),
-  amount: z.number().positive().max(99_999_999.99).multipleOf(0.01),
+  // Plafond métier : un rechargement de caisse reste une petite somme.
+  // Il limite l'impact d'une carte admin compromise ou d'une erreur de saisie.
+  amount: z.number().positive().max(500).multipleOf(0.01),
   paymentMethod: z.enum(["card", "cash"]),
 });
 

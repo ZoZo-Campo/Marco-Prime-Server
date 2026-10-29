@@ -13,3 +13,18 @@ export function deploymentMode(): DeploymentMode {
 export function envFileEditable() {
   return deploymentMode() === "local";
 }
+
+/**
+ * En mode serveur, une session administrateur signée est exigée sur les
+ * routes sensibles. `MARCO_ADMIN_AUTH=required` permet d'appliquer la même
+ * règle en local pour les tests, sans changer le mode de déploiement.
+ *
+ * La session est volontairement liée à un mot de passe de configuration :
+ * un numéro de carte n'est pas un secret et ne doit jamais suffire.
+ */
+export function adminSessionRequired() {
+  return (
+    deploymentMode() === "server" ||
+    process.env.MARCO_ADMIN_AUTH === "required"
+  );
+}

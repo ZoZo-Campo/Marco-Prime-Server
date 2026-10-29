@@ -16,29 +16,105 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   echo ".env.server vient d'être créé. Renseignez-le puis relancez la commande."
   exit 1
 fi
+
+env_value() {
+  grep -m1 "^$1=" "${ENV_FILE}" | cut -d= -f2- | tr -d '"' | tr -d "'"
+}
+
+domain() {
+  env_value MARCO_API_DOMAIN
+}
+
+# Refuse les configurations qui repartiraient sans authentification ou avec
+# un jeton trop court. Ces erreurs sont silencieuses en production ; mieux
+# vaut bloquer le démarrage.
+validate_env() {
+  local domain auth token deployment database frontend
+  domain="$(domain)"
+  auth="$(env_value API_AUTH_ENABLED)"
+  token="$(env_value API_TOKEN)"
+  deployment="$(env_value MARCO_DEPLOYMENT)"
+  database="$(env_value DATABASE_URL)"
+  frontend="$(env_value FRONTEND_URL)"
+
+  if [[ -z "${domain}" || "${domain}" == *REPLACE_HERE* ]]; then
+    echo "MARCO_API_DOMAIN est vide ou contient encore REPLACE_HERE."; exit 1
+  fi
+  if [[ "${auth}" != "true" ]]; then
+    echo "API_AUTH_ENABLED doit valoir true en déploiement serveur."; exit 1
+  fi
+  if [[ ! "${token}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "API_TOKEN doit contenir exactement 64 caractères hexadécimaux (openssl rand -hex 32)."; exit 1
+  fi
+  if [[ "${deployment}" != "server" ]]; then
+    echo "MARCO_DEPLOYMENT doit valoir server."; exit 1
+  fi
+  if [[ "${database}" != mysql://* || "${database}" == *REPLACE_HERE* ]]; then
+    echo "DATABASE_URL est absente ou contient encore REPLACE_HERE."; exit 1
+  fi
+  if [[ "${frontend}" != https://* ]]; then
+    echo "FRONTEND_URL doit commencer par https://."; exit 1
+  fi
+  if [[ "$(stat -f '%Lp' "${ENV_FILE}" 2>/dev/null || stat -c '%a' "${ENV_FILE}")" != "600" ]]; then
+    echo "Attention : ${ENV_FILE} n'est pas en permissions 600."
+  fi
+}
+
 if grep -q 'REPLACE_HERE' "${ENV_FILE}"; then
   echo ".env.server contient encore REPLACE_HERE."; exit 1
 fi
 
-domain() {
-  grep -m1 '^MARCO_API_DOMAIN=' "${ENV_FILE}" | cut -d= -f2- | tr -d '"' | tr -d "'"
-}
-
 case "${1:-help}" in
-  start) compose up -d --build ;;
-  rebuild|restart) compose up -d --build --force-recreate ;;
+  start) validate_env; compose up -d --build ;;
+  rebuild|restart) validate_env; compose up -d --build --force-recreate ;;
   stop) compose down ;;
   status) compose ps ;;
   logs) compose logs -f --tail=100 ;;
-  check) compose config --quiet && echo "Configuration serveur valide." ;;
+  check) validate_env; compose config --quiet && echo "Configuration serveur valide." ;;
 
   # Sauvegarde du volume de données : catalogue, compta, prix d'achat, journal.
+  # Les soldes, commandes et membres de BdeData ne sont PAS dans ce volume :
+  # la base distante doit être sauvegardée séparément (voir INSTALLATION_SERVEUR.md).
   backup)
+    umask 077
     stamp="$(date +%Y%m%d-%H%M%S)"
     target="${ROOT}/backups/marco-data-${stamp}.tar.gz"
-    mkdir -p "${ROOT}/backups"
+    mkdir -p -m 700 "${ROOT}/backups"
     compose exec -T app tar czf - -C /app/data . > "${target}"
+    chmod 600 "${target}"
     echo "Sauvegarde écrite : ${target}"
+    echo "Rappel : ce fichier ne contient pas les membres, soldes et commandes de BdeData."
+    ;;
+
+  # Remplace le contenu du volume /app/data par une archive de sauvegarde.
+  # Arrêt de l'application, extraction, redémarrage. Demande une confirmation
+  # explicite pour éviter un écrasement accidentel.
+  restore)
+    archive="${2:-}"
+    if [[ -z "${archive}" || ! -f "${archive}" ]]; then
+      echo "Usage : ./server restore <backups/marco-data-....tar.gz>"; exit 1
+    fi
+    echo "Cette opération remplace le contenu de /app/data par :"
+    echo "  ${archive}"
+    read -r -p "Tapez 'oui' pour continuer : " answer
+    if [[ "${answer}" != "oui" ]]; then echo "Annulé."; exit 1; fi
+    compose stop app
+    compose run --rm --no-deps -T app sh -c 'rm -rf /app/data/* && tar xzf - -C /app/data' < "${archive}"
+    compose start app
+    echo "Restauration terminée. Vérifiez /ready puis les données dans l'interface."
+    ;;
+
+  # Applique les tables et index de sécurité à une base existante (BdeData).
+  # Ne supprime aucune donnée. À tester d'abord sur une copie de la base.
+  migrate)
+    validate_env
+    echo "Cette commande applique les tables/index de sécurité à la base définie par DATABASE_URL."
+    if [[ "${MARCO_MIGRATE_YES:-}" != "1" ]]; then
+      read -r -p "Tapez 'oui' pour continuer : " answer
+      if [[ "${answer}" != "oui" ]]; then echo "Annulé."; exit 1; fi
+    fi
+    compose build app
+    compose run --rm --no-deps -T app node dist/db/migrate.js
     ;;
 
   # Exporte l'autorité locale Caddy, à installer sur les appareils clients.
@@ -50,5 +126,5 @@ case "${1:-help}" in
     ;;
 
   url) echo "https://$(domain)/" ;;
-  *) echo "Usage : ./server {start|rebuild|restart|stop|status|logs|check|backup|cert|url}" ;;
+  *) echo "Usage : ./server {start|rebuild|restart|stop|status|logs|check|migrate|backup|restore|cert|url}" ;;
 esac

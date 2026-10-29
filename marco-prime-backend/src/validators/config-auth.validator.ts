@@ -7,6 +7,9 @@ const passwordSchema = z
 
 export const configPasswordUnlockSchema = z.object({
   password: passwordSchema,
+  // Optionnel pour conserver le déverrouillage par mot de passe seul, mais
+  // s'il est fourni il doit correspondre à la carte associée au mot de passe.
+  adminCardNumber: z.number().int().positive().safe().optional(),
 });
 
 export const configPasswordSetupSchema = z.object({

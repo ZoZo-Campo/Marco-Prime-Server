@@ -1,22 +1,65 @@
+{
+	servers {
+		# Connexions lentes : bornes explicites pour éviter qu'un client garde
+		# une connexion ouverte indéfiniment.
+		timeouts {
+			read_header 10s
+			read_body 30s
+			write 30s
+			idle 120s
+		}
+	}
+}
+
 {$MARCO_API_DOMAIN} {
-  encode zstd gzip
+	encode zstd gzip
 
-  header {
-    Strict-Transport-Security "max-age=31536000"
-    X-Content-Type-Options "nosniff"
-    X-Frame-Options "DENY"
-    Referrer-Policy "no-referrer"
-    Permissions-Policy "camera=(self), microphone=(), geolocation=()"
-    -Server
-  }
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		Cross-Origin-Opener-Policy "same-origin"
+		Cross-Origin-Resource-Policy "same-origin"
+		-Server
+	}
 
-  # MARCO_TLS_DIRECTIVE accepte trois formes (voir INSTALLATION_SERVEUR.md) :
-  #   tls internal                            -> autorité locale Caddy (réseau fermé)
-  #   tls votre-adresse@exemple.fr            -> Let's Encrypt (DNS public requis)
-  #   tls /certs/fullchain.pem /certs/privkey.pem -> certificat fourni par l'école
-  {$MARCO_TLS_DIRECTIVE:tls internal}
+	# Un panier ou un rechargement tient en quelques kilo-octets. Cette limite
+	# protège l'application et la base contre les corps volumineux.
+	request_body {
+		max_size 1MB
+	}
 
-  # L'API et le frontend sont servis par le même conteneur, donc par la même
-  # origine : pas de CORS, un seul nom de domaine, un seul certificat.
-  reverse_proxy app:3000
+	# Journal d'accès JSON sur stdout, récupéré et rotationné par Docker.
+	# Les URLs contiennent des numéros de carte : les journaux doivent rester
+	# sur le serveur et être protégés comme des données personnelles.
+	log {
+		output stdout
+		format json
+	}
+
+	# MARCO_TLS_DIRECTIVE accepte trois formes (voir INSTALLATION_SERVEUR.md) :
+	#   tls internal                            -> autorité locale Caddy (réseau fermé)
+	#   tls votre-adresse@exemple.fr            -> Let's Encrypt (DNS public requis)
+	#   tls /certs/fullchain.pem /certs/privkey.pem -> certificat fourni par l'école
+	{$MARCO_TLS_DIRECTIVE:tls internal}
+
+	# Documentation d'API : inutile en production et surface d'attaque en plus.
+	@documentation path /ui /ui/* /doc
+	respond @documentation 404
+
+	# L'API et le frontend sont servis par le même conteneur, donc par la même
+	# origine : pas de CORS, un seul nom de domaine, un seul certificat.
+	reverse_proxy app:3000 {
+		# Le limiteur de l'application ne doit jamais lire un X-Forwarded-For
+		# fourni par le client. Caddy réécrit les deux en-têtes avec l'adresse
+		# réelle de la connexion.
+		header_up X-Real-IP {remote_host}
+		# Le jeton d'API ne quitte jamais le serveur : le frontend ne le
+		# connaît pas, Caddy l'ajoute à chaque requête vers l'API. Un en-tête
+		# Authorization fourni par le navigateur est donc toujours remplacé.
+		header_up Authorization "Bearer {$MARCO_API_TOKEN}"
+	}
 }

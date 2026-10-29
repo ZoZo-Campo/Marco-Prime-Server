@@ -2,11 +2,23 @@ import type { Context } from "hono";
 import type { z } from "zod";
 import { HTTPException } from "hono/http-exception";
 import { MemberRepository } from "../repositories/member.repository.js";
-import { OrderRepository } from "../repositories/order.repository.js";
+import {
+  OrderRepository,
+  type RechargeTransactionResult,
+} from "../repositories/order.repository.js";
 import { auditEvent } from "../config/logger.js";
+import { adminSessionRequired } from "../config/deployment.js";
 import { recordRechargeMethod } from "../services/recharge-method.service.js";
 import { rechargeCorrectionService } from "../services/recharge-correction.service.js";
 import { orderCorrectionService } from "../services/order-correction.service.js";
+import { configAuthService } from "../services/config-auth.service.js";
+import { verifyAdminSession } from "../services/admin-session.service.js";
+import {
+  findIdempotentResponse,
+  hashRequest,
+  IdempotencyConflictError,
+  updateIdempotentResponse,
+} from "../services/idempotency.service.js";
 import {
   rechargeCorrectionSchema,
   rechargeMethodUpdateSchema,
@@ -19,60 +31,112 @@ type RechargeMethodUpdateRequest = z.infer<typeof rechargeMethodUpdateSchema>;
 type RechargeCorrectionRequest = z.infer<typeof rechargeCorrectionSchema>;
 type RechargeReceiptDTO = z.infer<typeof rechargeReceiptSchema>;
 
-type CachedRecharge = {
+type InFlightRecharge = {
   requestKey: string;
-  receipt: RechargeReceiptDTO;
+  promise: Promise<RechargeReceiptDTO>;
 };
 
-const completedRecharges = new Map<string, CachedRecharge>();
-const rechargesInProgress = new Map<
-  string,
-  { requestKey: string; promise: Promise<RechargeReceiptDTO> }
->();
-const MAX_COMPLETED_RECHARGES = 1_000;
+// Uniquement pour fusionner deux requêtes simultanées dans le même processus.
+// La source de vérité est la table `idempotency_keys`, pas cette Map.
+const rechargesInProgress = new Map<string, InFlightRecharge>();
 
 export class RechargeController {
   private memberRepository = new MemberRepository();
   private orderRepository = new OrderRepository();
 
   async createRecharge(c: Context) {
-    const request = c.req.valid(
-      "json" as never,
-    ) as RechargeRequest;
-    const { transactionId, cardNumber, adminCardNumber, amount, paymentMethod } = request;
-    const requestKey = JSON.stringify({ cardNumber, adminCardNumber, amount, paymentMethod });
-    const completed = completedRecharges.get(transactionId);
+    const request = c.req.valid("json" as never) as RechargeRequest;
+    const requestKey = hashRequest("recharge", {
+      cardNumber: request.cardNumber,
+      adminCardNumber: request.adminCardNumber,
+      amount: request.amount,
+      paymentMethod: request.paymentMethod,
+    });
 
-    if (completed) {
-      if (completed.requestKey !== requestKey) {
+    const inFlight = rechargesInProgress.get(request.transactionId);
+    if (inFlight) {
+      if (inFlight.requestKey !== requestKey) {
         throw new HTTPException(409, {
           message: "Cet identifiant de transaction appartient à un autre rechargement",
         });
       }
-      return c.json(completed.receipt, 200);
+      return c.json(
+        await this.resolveReceipt(
+          inFlight.promise,
+          request.transactionId,
+          requestKey,
+        ),
+        201,
+      );
     }
 
-    let inProgress = rechargesInProgress.get(transactionId);
-    if (inProgress && inProgress.requestKey !== requestKey) {
-      throw new HTTPException(409, {
-        message: "Cet identifiant de transaction appartient à un autre rechargement",
-      });
-    }
-    if (!inProgress) {
-      inProgress = {
-        requestKey,
-        promise: this.processRecharge(request),
-      };
-      rechargesInProgress.set(transactionId, inProgress);
+    const cached = await this.readCached(request.transactionId, requestKey);
+    if (cached) return c.json(cached, 200);
+
+    const racing = rechargesInProgress.get(request.transactionId);
+    if (racing) {
+      if (racing.requestKey !== requestKey) {
+        throw new HTTPException(409, {
+          message: "Cet identifiant de transaction appartient à un autre rechargement",
+        });
+      }
+      return c.json(
+        await this.resolveReceipt(
+          racing.promise,
+          request.transactionId,
+          requestKey,
+        ),
+        201,
+      );
     }
 
+    const promise = this.processRecharge(c, request, requestKey);
+    rechargesInProgress.set(request.transactionId, { requestKey, promise });
     try {
-      const receipt = await inProgress.promise;
-      completedRecharges.set(transactionId, { requestKey, receipt });
-      trimCompletedRecharges();
+      const receipt = await this.resolveReceipt(
+        promise,
+        request.transactionId,
+        requestKey,
+      );
       return c.json(receipt, 201);
     } finally {
-      rechargesInProgress.delete(transactionId);
+      rechargesInProgress.delete(request.transactionId);
+    }
+  }
+
+  private async resolveReceipt(
+    promise: Promise<RechargeReceiptDTO>,
+    transactionId: string,
+    requestKey: string,
+  ): Promise<RechargeReceiptDTO> {
+    try {
+      return await promise;
+    } catch (error) {
+      try {
+        const cached = await this.readCached(transactionId, requestKey);
+        if (cached) return cached;
+      } catch (lookupError) {
+        if (lookupError instanceof HTTPException) throw lookupError;
+      }
+      throw error;
+    }
+  }
+
+  private async readCached(transactionId: string, requestKey: string) {
+    try {
+      const cached = await findIdempotentResponse(
+        transactionId,
+        "recharge",
+        requestKey,
+      );
+      return cached ? (cached as RechargeReceiptDTO) : null;
+    } catch (error) {
+      if (error instanceof IdempotencyConflictError) {
+        throw new HTTPException(409, {
+          message: "Cet identifiant de transaction appartient à un autre rechargement",
+        });
+      }
+      throw error;
     }
   }
 
@@ -149,10 +213,16 @@ export class RechargeController {
     try {
       result = await this.orderRepository.cancelRechargeTransaction(
         request.originalOrderId,
+        { adminMemberId: admin.id, reason: request.reason },
       );
     } catch (error) {
       await rechargeCorrectionService.removePending(request.originalOrderId);
       const message = error instanceof Error ? error.message : "";
+      if (message === "RECHARGE_ALREADY_APPLIED") {
+        throw new HTTPException(409, {
+          message: "Ce rechargement a déjà été annulé",
+        });
+      }
       if (message === "RECHARGE_CORRECTION_NOT_FOUND") {
         throw new HTTPException(404, { message: "Rechargement introuvable" });
       }
@@ -194,12 +264,16 @@ export class RechargeController {
 
   private async isPurchaseCorrectionOrder(orderId: number) {
     const corrections = await orderCorrectionService.all();
-    return corrections.some(
+    const inJournal = corrections.some(
       (correction) =>
         correction.status === "completed" &&
         (correction.refundOrderId === orderId ||
           correction.replacementOrderId === orderId),
     );
+    if (inJournal) return true;
+    // Le journal JSON peut avoir été perdu ; la table de correction reste
+    // la référence pour ne pas annuler un remboursement comme un recharge.
+    return this.orderRepository.isCorrectionLedgerOrder(orderId);
   }
 
   private async requireAdmin(cardNumber: number) {
@@ -212,14 +286,44 @@ export class RechargeController {
     return member;
   }
 
-  private async processRecharge({
-    transactionId,
-    cardNumber,
-    adminCardNumber,
-    amount,
-    paymentMethod,
-  }: RechargeRequest): Promise<RechargeReceiptDTO> {
+  /**
+   * Le parcours de rechargement reste inchangé : la carte admin autorise
+   * l'opération. En mode serveur, cette carte doit en plus être couverte par
+   * une session signée, obtenue avec le mot de passe de configuration.
+   */
+  private async assertRechargeAdminSession(c: Context, cardNumber: number) {
+    if (!adminSessionRequired()) return;
+    const status = await configAuthService.status();
+    // Premier démarrage : aucun mot de passe n'existe encore. L'interface
+    // invite l'administrateur à en définir un ; on ne bloque pas la caisse
+    // avant cette étape.
+    if (!status.configured) return;
+    const session = verifyAdminSession(c.req.header("x-admin-token"));
+    if (!session) {
+      throw new HTTPException(401, {
+        message:
+          "Session administrateur requise : saisissez le mot de passe de configuration",
+      });
+    }
+    if (session.cardNumber !== cardNumber) {
+      throw new HTTPException(403, {
+        message:
+          "La session administrateur ne correspond pas à la carte présentée",
+      });
+    }
+  }
 
+  private async processRecharge(
+    c: Context,
+    {
+      transactionId,
+      cardNumber,
+      adminCardNumber,
+      amount,
+      paymentMethod,
+    }: RechargeRequest,
+    requestKey: string,
+  ): Promise<RechargeReceiptDTO> {
     const member = await this.memberRepository.findFullByCardNumber(cardNumber);
     if (!member) {
       throw new HTTPException(404, {
@@ -227,15 +331,16 @@ export class RechargeController {
       });
     }
 
+    const authorizingCard =
+      adminCardNumber ?? (member.admin ? member.cardNumber! : null);
+    if (!authorizingCard) {
+      throw new HTTPException(403, {
+        message: "Admin card number required for non-admin member recharge",
+      });
+    }
+
     let adminMember = null;
-
-    if (!member.admin) {
-      if (!adminCardNumber) {
-        throw new HTTPException(403, {
-          message: "Admin card number required for non-admin member recharge",
-        });
-      }
-
+    if (adminCardNumber) {
       const admin =
         await this.memberRepository.findFullByCardNumber(adminCardNumber);
       if (!admin) {
@@ -243,85 +348,99 @@ export class RechargeController {
           message: "Carte administrateur inconnue",
         });
       }
-
       if (!admin.admin) {
         throw new HTTPException(403, {
           message: "Provided card number is not an admin",
         });
       }
-
       adminMember = admin;
     }
+
+    await this.assertRechargeAdminSession(c, authorizingCard);
 
     const rechargeAmount = parseFloat(amount.toFixed(2));
     const recharge = await this.orderRepository.createRechargeTransaction(
       member.id,
       rechargeAmount,
+      {
+        transactionId,
+        requestHash: requestKey,
+        buildResponse: (result: RechargeTransactionResult) =>
+          ({
+            success: true,
+            transaction: {
+              transactionId,
+              orderId: result.orderId,
+              date: result.orderDate,
+              member: {
+                id: member.id,
+                firstName: member.firstName,
+                lastName: member.lastName,
+                cardNumber: member.cardNumber!,
+              },
+              processedBy: adminMember
+                ? {
+                    id: adminMember.id,
+                    firstName: adminMember.firstName,
+                    lastName: adminMember.lastName,
+                    cardNumber: adminMember.cardNumber!,
+                    isAdmin: adminMember.admin,
+                  }
+                : undefined,
+              amount: rechargeAmount.toFixed(2),
+              previousBalance: result.previousBalance,
+              newBalance: result.newBalance,
+              paymentMethod,
+              paymentMethodRecorded: true,
+            },
+          }) satisfies RechargeReceiptDTO,
+      },
     );
 
-    // The balance is already committed. Never report a failed recharge solely
-    // because the local payment-method annotation could not be saved.
+    const { result, response } = recharge;
+    let receipt = response as RechargeReceiptDTO;
+
+    // Le solde est déjà validé. Une erreur d'annotation locale ne doit jamais
+    // faire croire que le rechargement a échoué ni provoquer un second crédit.
     let paymentMethodRecorded = true;
     try {
-      await recordRechargeMethod(recharge.orderId, paymentMethod, {
+      await recordRechargeMethod(result.orderId, paymentMethod, {
         cardNumber: member.cardNumber ?? undefined,
         firstName: member.firstName,
         lastName: member.lastName,
         amount: rechargeAmount.toFixed(2),
-        orderDate: new Date(recharge.orderDate).toISOString(),
+        orderDate: new Date(result.orderDate).toISOString(),
       });
     } catch (error) {
       paymentMethodRecorded = false;
       console.error("Recharge enregistrée, mode de paiement non sauvegardé", error);
     }
 
-    const receipt = {
-      success: true,
-      transaction: {
+    if (!paymentMethodRecorded) {
+      receipt = {
+        ...receipt,
+        transaction: { ...receipt.transaction, paymentMethodRecorded: false },
+      };
+      // La réponse mémorisée doit refléter l'état réel pour les rejeux.
+      await updateIdempotentResponse(
         transactionId,
-        orderId: recharge.orderId,
-        date: recharge.orderDate,
-        member: {
-          id: member.id,
-          firstName: member.firstName,
-          lastName: member.lastName,
-          cardNumber: member.cardNumber!,
-        },
-        processedBy: adminMember
-          ? {
-              id: adminMember.id,
-              firstName: adminMember.firstName,
-              lastName: adminMember.lastName,
-              cardNumber: adminMember.cardNumber!,
-              isAdmin: adminMember.admin,
-            }
-          : undefined,
-        amount: rechargeAmount.toFixed(2),
-        previousBalance: recharge.previousBalance,
-        newBalance: recharge.newBalance,
-        paymentMethod,
-        paymentMethodRecorded,
-      },
-    } satisfies RechargeReceiptDTO;
+        "recharge",
+        receipt,
+      ).catch((error) => {
+        console.error("Réponse de rechargement non mise à jour", error);
+      });
+    }
 
     auditEvent("recharge.completed", {
       transactionId,
       memberId: member.id,
-      orderId: recharge.orderId,
-      previousBalance: recharge.previousBalance,
+      orderId: result.orderId,
+      previousBalance: result.previousBalance,
       amount: rechargeAmount.toFixed(2),
-      newBalance: recharge.newBalance,
+      newBalance: result.newBalance,
       processedByMemberId: adminMember?.id ?? member.id,
     });
 
     return receipt;
-  }
-}
-
-function trimCompletedRecharges() {
-  while (completedRecharges.size > MAX_COMPLETED_RECHARGES) {
-    const oldestTransactionId = completedRecharges.keys().next().value;
-    if (!oldestTransactionId) return;
-    completedRecharges.delete(oldestTransactionId);
   }
 }

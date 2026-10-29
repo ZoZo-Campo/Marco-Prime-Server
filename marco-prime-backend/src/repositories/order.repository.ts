@@ -12,7 +12,49 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { db } from "../config/database.js";
-import { members, orders, products } from "../db/schema.js";
+import {
+  idempotencyKeys,
+  members,
+  orderCorrections,
+  orders,
+  products,
+} from "../db/schema.js";
+
+export interface PurchaseTransactionResult {
+  orderIds: number[];
+  orderDate: Date;
+  previousBalance: string;
+  newBalance: string;
+  totalPrice: string;
+  items: Array<{
+    product: {
+      id: number;
+      name: string;
+      title: string;
+      price: string;
+    };
+    amount: number;
+    totalPrice: string;
+  }>;
+}
+
+export interface RechargeTransactionResult {
+  orderId: number;
+  orderDate: Date;
+  previousBalance: string;
+  newBalance: string;
+}
+
+export interface IdempotencyInput<T> {
+  transactionId: string;
+  requestHash: string;
+  buildResponse: (result: T) => unknown;
+}
+
+export interface CorrectionMetadata {
+  adminMemberId: number;
+  reason: string;
+}
 
 export class OrderRepository {
   async countAll(filters: OrderHistoryFilters = {}) {
@@ -76,24 +118,18 @@ export class OrderRepository {
     memberId: number,
     requestedItems: Array<{ productId: number; amount: number }>,
     selectedProductIds: number[] | null,
-  ): Promise<{
-    orderIds: number[];
-    orderDate: Date;
-    previousBalance: string;
-    newBalance: string;
-    totalPrice: string;
-    items: Array<{
-      product: {
-        id: number;
-        name: string;
-        title: string;
-        price: string;
-      };
-      amount: number;
-      totalPrice: string;
-    }>;
-  }> {
+    idempotency: IdempotencyInput<PurchaseTransactionResult>,
+  ): Promise<{ result: PurchaseTransactionResult; response: unknown }> {
     return await db.transaction(async (tx) => {
+      // Réserver l'identifiant AVANT toute écriture financière. Un rejeu
+      // concurrent ou après redémarrage échoue ici, avant tout débit.
+      await tx.insert(idempotencyKeys).values({
+        transactionId: idempotency.transactionId,
+        scope: "purchase",
+        requestHash: idempotency.requestHash,
+        responseJson: "{}",
+      });
+
       const [lockedMember] = await tx
         .select({ balance: members.balance })
         .from(members)
@@ -215,7 +251,7 @@ export class OrderRepository {
         .where(eq(orders.id, orderIds[0]!))
         .limit(1);
 
-      return {
+      const result: PurchaseTransactionResult = {
         orderIds,
         orderDate: createdOrder.date,
         previousBalance: lockedMember.balance,
@@ -227,19 +263,33 @@ export class OrderRepository {
           totalPrice: item.totalPrice,
         })),
       };
+      // La réponse est écrite dans la même transaction que le débit : un
+      // rejeu retrouve exactement le même ticket, jamais un second débit.
+      const response = idempotency.buildResponse(result);
+      await tx
+        .update(idempotencyKeys)
+        .set({ responseJson: JSON.stringify(response) })
+        .where(
+          eq(idempotencyKeys.transactionId, idempotency.transactionId),
+        );
+      return { result, response };
     });
   }
 
   async createRechargeTransaction(
     memberId: number,
     amount: number,
-  ): Promise<{
-    orderId: number;
-    orderDate: Date;
-    previousBalance: string;
-    newBalance: string;
-  }> {
+    idempotency: IdempotencyInput<RechargeTransactionResult>,
+  ): Promise<{ result: RechargeTransactionResult; response: unknown }> {
     return await db.transaction(async (tx) => {
+      // Même principe que pour l'achat : réserver avant de créditer.
+      await tx.insert(idempotencyKeys).values({
+        transactionId: idempotency.transactionId,
+        scope: "recharge",
+        requestHash: idempotency.requestHash,
+        responseJson: "{}",
+      });
+
       const amountCents = toCents(amount.toFixed(2));
       if (
         amountCents === null ||
@@ -296,12 +346,20 @@ export class OrderRepository {
 
       if (!createdOrder) throw new Error("Recharge ledger entry not found");
 
-      return {
+      const result: RechargeTransactionResult = {
         orderId: order.id,
         orderDate: createdOrder.date,
         previousBalance: lockedMember.balance,
         newBalance,
       };
+      const response = idempotency.buildResponse(result);
+      await tx
+        .update(idempotencyKeys)
+        .set({ responseJson: JSON.stringify(response) })
+        .where(
+          eq(idempotencyKeys.transactionId, idempotency.transactionId),
+        );
+      return { result, response };
     });
   }
 
@@ -325,8 +383,21 @@ export class OrderRepository {
     return recharge ?? null;
   }
 
-  async cancelRechargeTransaction(originalOrderId: number) {
+  async cancelRechargeTransaction(
+    originalOrderId: number,
+    correction: CorrectionMetadata,
+  ) {
     return await db.transaction(async (tx) => {
+      const [alreadyCorrected] = await tx
+        .select({ id: orderCorrections.id })
+        .from(orderCorrections)
+        .where(eq(orderCorrections.originalOrderId, originalOrderId))
+        .limit(1)
+        .for("update");
+      if (alreadyCorrected) {
+        throw new Error("RECHARGE_ALREADY_APPLIED");
+      }
+
       const [original] = await tx
         .select({
           id: orders.id,
@@ -390,6 +461,22 @@ export class OrderRepository {
         .set({ balance: fromCents(newBalanceCents) })
         .where(eq(members.id, original.memberId));
 
+      try {
+        await tx.insert(orderCorrections).values({
+          originalOrderId,
+          kind: "recharge",
+          adminMemberId: correction.adminMemberId,
+          reason: correction.reason,
+          refundOrderId: cancellation.id,
+          replacementOrderId: null,
+        });
+      } catch (error) {
+        if (isDuplicateKeyError(error)) {
+          throw new Error("RECHARGE_ALREADY_APPLIED");
+        }
+        throw error;
+      }
+
       return {
         originalOrderId,
         cancellationOrderId: cancellation.id,
@@ -405,8 +492,19 @@ export class OrderRepository {
     originalOrderId: number,
     replacementProductId: number | null,
     replacementAmount: number,
+    correction: CorrectionMetadata,
   ) {
     return await db.transaction(async (tx) => {
+      const [alreadyCorrected] = await tx
+        .select({ id: orderCorrections.id })
+        .from(orderCorrections)
+        .where(eq(orderCorrections.originalOrderId, originalOrderId))
+        .limit(1)
+        .for("update");
+      if (alreadyCorrected) {
+        throw new Error("CORRECTION_ALREADY_APPLIED");
+      }
+
       const [original] = await tx
         .select({
           id: orders.id,
@@ -504,6 +602,22 @@ export class OrderRepository {
 
       await tx.update(members).set({ balance: fromCents(newBalanceCents) }).where(eq(members.id, original.memberId));
 
+      try {
+        await tx.insert(orderCorrections).values({
+          originalOrderId,
+          kind: "purchase",
+          adminMemberId: correction.adminMemberId,
+          reason: correction.reason,
+          refundOrderId: refund.id,
+          replacementOrderId,
+        });
+      } catch (error) {
+        if (isDuplicateKeyError(error)) {
+          throw new Error("CORRECTION_ALREADY_APPLIED");
+        }
+        throw error;
+      }
+
       return {
         originalOrderId,
         refundOrderId: refund.id,
@@ -519,6 +633,25 @@ export class OrderRepository {
         newBalance: fromCents(newBalanceCents),
       };
     });
+  }
+
+  /**
+   * Vérifie en base si une écriture est le remboursement ou le remplacement
+   * d'une correction. Le journal JSON reste consulté en complément pour les
+   * corrections antérieures à la migration.
+   */
+  async isCorrectionLedgerOrder(orderId: number) {
+    const [row] = await db
+      .select({ id: orderCorrections.id })
+      .from(orderCorrections)
+      .where(
+        or(
+          eq(orderCorrections.refundOrderId, orderId),
+          eq(orderCorrections.replacementOrderId, orderId),
+        ),
+      )
+      .limit(1);
+    return Boolean(row);
   }
 }
 
@@ -552,6 +685,14 @@ function historyCondition(filters: OrderHistoryFilters) {
   }
 
   return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+function isDuplicateKeyError(error: unknown) {
+  const candidate = error as { code?: string; cause?: { code?: string } };
+  return (
+    candidate?.code === "ER_DUP_ENTRY" ||
+    candidate?.cause?.code === "ER_DUP_ENTRY"
+  );
 }
 
 const MAX_DATABASE_MONEY_CENTS = 9_999_999_999;

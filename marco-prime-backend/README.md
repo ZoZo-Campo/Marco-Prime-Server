@@ -56,19 +56,21 @@ API_PORT=3000
 API_HOST=0.0.0.0
 MARCO_DEPLOYMENT=server
 API_AUTH_ENABLED=true
-API_TOKEN=<jeton>
-DATABASE_URL="mysql://user:password@host:3307/database_name"
+API_TOKEN=<64 caractères hexadécimaux>
+DATABASE_URL="mysql://user:password@host:3306/database_name"
 NODE_ENV=production
 FRONTEND_URL=https://marco.example.fr
-FOUAILLE_API_URL="https://fouaille.bde-tps.fr/api/product"
+FOUAILLE_API_URL="https://fouaille.example.fr/api/product"
 FOUAILLE_SYNC_ENABLED=false
 FOUAILLE_SYNC_INTERVAL_MS=300000
 MARCO_DATA_DIR=/app/data
 ```
 
-`GET /runtime-config.js` expose au frontend l'URL de l'API, le jeton et le mode
-de déploiement. Le frontend n'a donc pas besoin d'être reconstruit quand le
-jeton change.
+`GET /runtime-config.js` expose au frontend l'URL de l'API et le mode de
+déploiement, **sans jeton**. En mode serveur, Caddy ajoute
+`Authorization: Bearer $API_TOKEN` à chaque requête vers l'API. Le frontend n'a
+donc pas besoin d'être reconstruit quand le jeton change ; en revanche, changer
+`API_TOKEN` invalide les sessions administrateur en cours.
 
 ## Scripts disponibles
 
@@ -110,6 +112,9 @@ pnpm db:generate
 # Appliquer les migrations
 pnpm db:migrate
 
+# Ajouter les tables/index de sécurité à une base existante (idempotent)
+pnpm db:security
+
 # Ouvrir Drizzle Studio
 pnpm db:studio
 
@@ -117,17 +122,22 @@ pnpm db:studio
 pnpm db:seed
 ```
 
+`pnpm db:security` exécute `src/db/migrate.ts` : il crée `idempotency_keys` et
+`order_corrections`, ajoute l'unicité des badges et les index de lecture, sans
+supprimer aucune donnée. Il est prévu pour `BdeData` déjà existante. Sur une base
+neuve, `pnpm db:migrate` applique l'historique Drizzle complet. Sur le serveur,
+la commande équivalente est `./server migrate`.
+
 ## Documentation API
 
-Une documentation Swagger UI interactive est disponible une fois le serveur démarré:
+Une documentation Swagger UI interactive est disponible en développement :
 
-- **Swagger UI**: http://localhost:3000/ui (en production : `https://<domaine>/ui`)
+- **Swagger UI**: http://localhost:3000/ui
 - **Spécification OpenAPI**: http://localhost:3000/doc
 
-Ces deux routes sont **publiques** : elles sont déclarées avant `authMiddleware`
-et ne nécessitent pas le jeton. Elles ne décrivent que les routes et les schémas,
-sans exposer de données. Pour les masquer sur un déploiement exposé, filtrez-les
-dans `Caddyfile`.
+En production, le `Caddyfile` fait répondre `404` à ces deux routes. Elles ne
+décrivent que les routes et les schémas, sans données, mais elles restent une
+surface d'attaque inutile sur un serveur exposé.
 
 ## Endpoints principaux
 
@@ -173,12 +183,16 @@ client identifié par RFID.
 La disponibilité Fouaille est partagée entre les caisses. La sélection des
 produits vendus ce soir est propre à la Marco. Les mutations de produits sont
 refusées si `FOUAILLE_SYNC_ENABLED=true`, car la synchronisation écraserait
-ces changements.
+ces changements. Dans ce cas, `FOUAILLE_API_URL` doit aussi être défini :
+aucune adresse Fouaille n'est codée en dur dans le dépôt.
 
 Droits MySQL du compte applicatif : `SELECT`, `INSERT` et `UPDATE` sur
-`members`, `products`, `product_types` et `orders`. Aucun `DELETE` n'est
+`members`, `products`, `product_types` et `orders`, plus `DELETE` sur
+`idempotency_keys` (purge des clés anciennes). Aucun autre `DELETE` n'est
 nécessaire en exploitation. `product_types` n'est écrit que par la
-synchronisation Fouaille, et seulement si elle est activée.
+synchronisation Fouaille, et seulement si elle est activée. La migration
+initiale (`pnpm db:security`, `./server migrate`) demande temporairement
+`CREATE`, `ALTER` et `INDEX`.
 
 ### Commandes
 - `GET /api/v1/history` - Historique paginé, filtrable par nom, produit, date ou numéro de transaction
@@ -195,8 +209,10 @@ même protection s’applique à une correction qui augmenterait le montant déb
 Une correction conserve la vente d’origine pour l’audit. Dans une même
 transaction MySQL, Marco rembourse intégralement cette vente, crée
 éventuellement la ligne de remplacement et ajuste le solde une seule fois. Le
-journal local `order-corrections.json` empêche de corriger deux fois la même
-vente. Une correction laissée dans l’état `pending` après une coupure doit être
+journal local `order-corrections.json` sert à l’affichage, mais la garde
+anti-double-correction est la table `order_corrections` (`original_order_id`
+unique) : même si le volume local est perdu, une seconde correction répond
+`409`. Une correction laissée dans l’état `pending` après une coupure doit être
 vérifiée par un administrateur avant toute intervention manuelle.
 
 Dans l’interface, la correction se fait directement en touchant une ligne de
@@ -249,7 +265,35 @@ dossier n’est pas disponible, les fichiers sont téléchargés dans le dossier
 configuré dans Chromium.
 
 ### Recharges
-- `POST /api/v1/recharge` - Recharger le solde d'un membre
+- `POST /api/v1/recharge` - Recharger le solde d'un membre (500 € maximum par opération)
+- `PUT /api/v1/recharge-method` - Changer la méthode de paiement par défaut (session administrateur)
+- `POST /api/v1/recharge-corrections/apply` - Annuler un rechargement (session administrateur)
+
+Un rechargement et un achat sont idempotents : le même `transactionId` rejoué
+après une coupure renvoie la réponse enregistrée sans débiter une seconde fois.
+La clé et la réponse sont stockées dans `idempotency_keys`, dans la même
+transaction MySQL que l'écriture financière. Un `transactionId` réutilisé avec
+un autre contenu est refusé (`409`).
+
+### Session administrateur
+
+Les routes marquées « administrateur » ci-dessus ne se contentent pas d'un
+numéro de carte en mode serveur. Elles exigent aussi, dès qu'un mot de passe de
+configuration existe :
+
+```http
+X-Admin-Token: <jeton renvoyé par POST /api/v1/config-auth/unlock>
+```
+
+La session dure 30 minutes, est signée avec `API_TOKEN` et est liée à la carte
+de l'administrateur. `POST /api/v1/config-auth/unlock` accepte
+`{ password, adminCardNumber? }` et renvoie `{ success, member, adminToken,
+expiresAt }`. Le premier `POST /api/v1/config-auth/setup` exige
+`X-Setup-Token: <API_TOKEN>`.
+
+Les routes `/members/search` et `/history` restent publiques pour ne pas casser
+le passage en caisse ; elles ne doivent être accessibles que depuis le réseau de
+l'école. Voir la section « Sécurité » du README racine.
 
 ## Architecture
 
@@ -273,10 +317,23 @@ src/
 
 ## Sécurité
 
-- **Authentification** - Bearer token sur toutes les routes `/api/v1/*`
-- **Rate limiting** - 300 requêtes par minute par IP
-- **Validation** - Validation stricte des entrées avec Zod
-- **Error handling** - Gestion centralisée des erreurs avec HTTPException
+- **Jeton d'API** - Bearer token sur toutes les routes `/api/v1/*`. En
+  production, il est injecté par Caddy et n'est jamais envoyé au navigateur.
+- **Session administrateur** - Jeton signé HMAC-SHA256, 30 minutes, exigé sur
+  les routes sensibles en mode serveur dès qu'un mot de passe est configuré.
+  Le numéro de carte seul ne suffit pas.
+- **Amorçage** - Le premier mot de passe exige `X-Setup-Token: <API_TOKEN>`.
+- **Idempotence** - Les achats et rechargements sont protégés par une clé
+  persistée en base ; une double correction est bloquée par une contrainte
+  unique.
+- **Rate limiting** - 300 requêtes par minute et par IP ; 30 par minute sur
+  `/api/v1/config-auth/unlock`, `setup`, `password` et `disable`. Verrouillage
+  temporaire après plusieurs échecs de mot de passe.
+- **Limite de corps** - 1 Mo par requête.
+- **Validation** - Validation stricte des entrées avec Zod.
+- **Error handling** - Gestion centralisée des erreurs avec HTTPException.
+- **Journaux** - Numéros de carte masqués ; les réponses API sont en
+  `Cache-Control: no-store`.
 
 ## Tests
 
@@ -304,15 +361,19 @@ Les tests couvrent:
 - CRUD membres
 - CRUD produits
 - Historique des commandes
-- Création d'achats
-- Recharges de solde
+- Création d'achats, idempotence et concurrence
+- Recharges de solde, plafond et annulation unique
+- Corrections de ventes et de rechargements
+- Sessions administrateur et amorçage du mot de passe
 
 ## Fonctionnalités
 
 ### Rate Limiting
-- Limite de 300 requêtes par minute par IP
+- Limite de 300 requêtes par minute par IP sur `/api/v1/*`
+- Limite de 30 requêtes par minute sur `unlock`, `setup`, `password` et `disable`
 - Désactivé en environnement de test
-- Basé sur les headers `x-forwarded-for` et `x-real-ip`
+- Adresse lue depuis la socket, puis `X-Real-IP` (réécrit par Caddy) ;
+  `X-Forwarded-For` n'est pas utilisé
 
 ### Logging
 - Logs HTTP sur la sortie standard (`docker compose logs`)
@@ -332,6 +393,8 @@ Les tests couvrent:
 - **products** - Catalogue de produits
 - **product_types** - Catégories de produits
 - **orders** - Historique des commandes
+- **idempotency_keys** - Réponses mémorisées des achats/rechargements (30 jours)
+- **order_corrections** - Garde anti-double-correction
 
 ### Seed
 
@@ -340,6 +403,10 @@ La commande `pnpm db:seed` génère:
 - 30 membres (avec admins)
 - 20 produits
 - 100 commandes historiques
+
+Elle refuse toute base dont le nom ne contient pas `test`. Elle supprime et
+recrée les tables métier ainsi que les tables de sécurité : elle ne doit jamais
+être lancée contre `BdeData`.
 
 ## Licence
 

@@ -9,6 +9,8 @@ import { apiHeaders, apiUrl } from "../../../config/api";
 import { AdminAuthPanel } from "../auth/admin-auth-panel";
 import { MemberProvider, useMember } from "../../../contexts/member-context";
 import type { OrderSchema } from "../../../schemas/order.schema";
+import { isAdminAccessGranted } from "../../../utils/admin-access";
+import { clearAdminSession } from "../../../utils/admin-session";
 import { Button } from "../../ui/button";
 
 interface RechargeCorrectionFormProps {
@@ -37,12 +39,21 @@ function RechargeCorrectionEditor({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (member?.admin) pause();
-    else resume();
-  }, [member?.admin]);
+  const isAdmin =
+    member?.admin === true && isAdminAccessGranted(member.cardNumber);
 
-  if (!member?.admin) {
+  useEffect(() => {
+    if (isAdmin) pause();
+    else resume();
+  }, [isAdmin]);
+
+  const changeAdministrator = () => {
+    clearAdminSession();
+    clear();
+    resume();
+  };
+
+  if (!member || !isAdmin) {
     return (
       <section class="mt-6 border-t pt-5">
         <AdminAuthPanel
@@ -143,7 +154,7 @@ function RechargeCorrectionEditor({
             Autorisé par {member.firstName} {member.lastName}
           </p>
         </div>
-        <Button variant="ghost" size="sm" onClick={clear}>
+        <Button variant="ghost" size="sm" onClick={changeAdministrator}>
           Changer d’administrateur
         </Button>
       </div>

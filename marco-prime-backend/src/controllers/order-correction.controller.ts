@@ -58,9 +58,16 @@ export class OrderCorrectionController {
         request.originalOrderId,
         request.replacementProductId,
         request.replacementAmount,
+        { adminMemberId: admin.id, reason: request.reason },
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
+      if (message === "CORRECTION_ALREADY_APPLIED") {
+        await orderCorrectionService.removePending(request.originalOrderId);
+        throw new HTTPException(409, {
+          message: "Cette vente a déjà été corrigée en base",
+        });
+      }
       if (message === "CORRECTION_INSUFFICIENT_BALANCE") {
         await orderCorrectionService.removePending(request.originalOrderId);
         throw new HTTPException(402, {

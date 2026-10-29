@@ -9,9 +9,14 @@ import {
   ShieldCheck,
 } from "lucide-preact";
 import { useEffect, useState } from "preact/hooks";
-import { apiHeaders, apiUrl } from "../../../config/api";
 import { useMember } from "../../../contexts/member-context";
-import { memberSchema } from "../../../schemas/member.schema";
+import { clearAdminSession } from "../../../utils/admin-session";
+import { isAdminAccessGranted } from "../../../utils/admin-access";
+import { unlockAdminSession } from "../../../utils/admin-unlock";
+import {
+  configPasswordConfigured,
+  refreshConfigAuthStatus,
+} from "../../../utils/config-auth-status";
 import { Button } from "../../ui/button";
 import { Card } from "../../ui/card";
 import { CardCodeEntry } from "../buy/card-code-entry";
@@ -51,25 +56,23 @@ export function AdminAuthPanel({
   } = useMember();
   const [method, setMethod] = useState<AuthMethod>("card");
   const [password, setPassword] = useState("");
-  const [passwordConfigured, setPasswordConfigured] = useState(false);
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!allowPassword) return;
-    fetch(apiUrl("config-auth/status"), {
-      cache: "no-store",
-      headers: apiHeaders(),
-    })
-      .then(async (response) => {
-        if (!response.ok) return;
-        const body = (await response.json()) as { configured?: boolean };
-        setPasswordConfigured(body.configured === true);
-      })
-      .catch(() => setPasswordConfigured(false));
-  }, [allowPassword]);
+    if (configPasswordConfigured.value === null) {
+      void refreshConfigAuthStatus();
+    }
+  }, []);
 
-  if (member?.admin) return null;
+  const passwordConfigured = configPasswordConfigured.value === true;
+  // Une carte admin identifiée ne suffit plus en mode serveur : si un mot de
+  // passe existe, il faut ouvrir une session signée pour cette carte avant de
+  // toucher aux données. En local/tablette, le parcours carte reste inchangé.
+  const needsConfirmation =
+    member?.admin === true && !isAdminAccessGranted(member.cardNumber);
+
+  if (member?.admin && !needsConfirmation) return null;
 
   const chooseMethod = (next: AuthMethod) => {
     setMethod(next);
@@ -77,7 +80,7 @@ export function AdminAuthPanel({
     if (next !== "card") resume();
   };
 
-  const unlockWithPassword = async () => {
+  const unlockWithPassword = async (cardNumber?: number) => {
     if (password.length < 8) {
       setPasswordError("Saisissez le mot de passe de configuration.");
       return;
@@ -85,23 +88,9 @@ export function AdminAuthPanel({
     setPasswordLoading(true);
     setPasswordError(null);
     try {
-      const response = await fetch(apiUrl("config-auth/unlock"), {
-        method: "POST",
-        headers: apiHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ password }),
-      });
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(
-          body?.message ?? body?.error ?? `Erreur HTTP ${response.status}`,
-        );
-      }
-      const parsed = memberSchema.safeParse(body?.member);
-      if (!parsed.success) {
-        throw new Error("Réponse administrateur invalide.");
-      }
+      const unlocked = await unlockAdminSession(password, cardNumber);
       setPassword("");
-      select(parsed.data);
+      select(unlocked);
     } catch (cause) {
       setPasswordError(
         cause instanceof Error ? cause.message : "Déverrouillage impossible.",
@@ -114,6 +103,75 @@ export function AdminAuthPanel({
   const methods: AuthMethod[] = allowPassword && passwordConfigured
     ? ["card", "qr", "code", "password"]
     : ["card", "qr", "code"];
+
+  if (needsConfirmation && member) {
+    return (
+      <Card class="gap-4 p-5">
+        <div class="flex items-start gap-3">
+          <span class="flex size-11 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+            <ShieldCheck class="size-6" />
+          </span>
+          <div class="min-w-0">
+            <h2 class="text-xl font-bold">Confirmer la session</h2>
+            <p class="mt-1 text-sm text-muted-foreground">
+              Carte reconnue : {member.firstName} {member.lastName}. Saisissez
+              le mot de passe de configuration pour autoriser les actions
+              sensibles.
+            </p>
+          </div>
+        </div>
+        <form
+          class="flex flex-col gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void unlockWithPassword(member.cardNumber);
+          }}
+        >
+          <label class="text-sm font-medium" for="admin-confirm-password">
+            Mot de passe de configuration
+          </label>
+          <div class="flex flex-wrap gap-2">
+            <input
+              id="admin-confirm-password"
+              type="password"
+              autocomplete="current-password"
+              maxlength={128}
+              class="min-h-11 min-w-0 flex-1 border bg-input px-3 text-lg"
+              value={password}
+              placeholder="Mot de passe"
+              onInput={(event) => {
+                setPassword(event.currentTarget.value);
+                setPasswordError(null);
+              }}
+            />
+            <Button
+              type="submit"
+              disabled={passwordLoading || password.length < 8}
+            >
+              {passwordLoading ? <Loader2 class="size-4 animate-spin" /> : null}
+              Autoriser
+            </Button>
+          </div>
+          {passwordError && (
+            <p class="flex gap-2 text-sm text-destructive">
+              <AlertTriangle class="size-4 shrink-0" /> {passwordError}
+            </p>
+          )}
+        </form>
+        <Button
+          variant="outline"
+          onClick={() => {
+            clearAdminSession();
+            setPassword("");
+            setPasswordError(null);
+            clear();
+          }}
+        >
+          Changer de carte
+        </Button>
+      </Card>
+    );
+  }
 
   return (
     <Card class="gap-4 p-5">

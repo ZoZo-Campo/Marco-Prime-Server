@@ -14,6 +14,8 @@ import {
   productCostListSchema,
   type ProductCost,
 } from "../../../schemas/statistics.schema";
+import { isAdminAccessGranted } from "../../../utils/admin-access";
+import { clearAdminSession } from "../../../utils/admin-session";
 import { Button } from "../../ui/button";
 
 interface OrderCorrectionFormProps {
@@ -47,7 +49,8 @@ function OrderCorrectionEditor({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const isAdmin = member?.admin === true;
+  const isAdmin =
+    member?.admin === true && isAdminAccessGranted(member.cardNumber);
 
   useEffect(() => {
     if (isAdmin) pause();
@@ -55,6 +58,7 @@ function OrderCorrectionEditor({
   }, [isAdmin]);
 
   const changeAdministrator = () => {
+    clearAdminSession();
     clear();
     resume();
   };
@@ -88,7 +92,7 @@ function OrderCorrectionEditor({
     };
   }, [isAdmin]);
 
-  if (!isAdmin) {
+  if (!member || !isAdmin) {
     return (
       <section class="mt-6 border-t pt-5">
         <AdminAuthPanel

@@ -32,6 +32,11 @@ import { MembersPanel } from "../components/features/config/members-panel";
 import { FouailleProductsPanel } from "../components/features/config/fouaille-products-panel";
 import { SetupPanel } from "../components/features/config/setup-panel";
 import { AdminAuthPanel } from "../components/features/auth/admin-auth-panel";
+import { isAdminAccessGranted } from "../utils/admin-access";
+import {
+  configPasswordConfigured,
+  refreshConfigAuthStatus,
+} from "../utils/config-auth-status";
 
 export const CONFIG_ROUTE_URL = "/config";
 
@@ -49,7 +54,18 @@ export function ConfigPage() {
 
 function ConfigContent() {
   const { data: member, pause } = useMember();
-  const isAdmin = member?.admin === true;
+  // En mode serveur uniquement, une carte admin ne suffit pas si un mot de
+  // passe existe : il faut une session signée pour cette carte. En local ou
+  // sur tablette, le parcours carte historique reste inchangé.
+  const isAdmin =
+    member?.admin === true && isAdminAccessGranted(member.cardNumber);
+
+  useEffect(() => {
+    if (configPasswordConfigured.value === null) {
+      void refreshConfigAuthStatus();
+    }
+  }, []);
+
   useEffect(() => {
     if (isAdmin) pause();
   }, [isAdmin]);
